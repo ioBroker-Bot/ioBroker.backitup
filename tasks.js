@@ -28,7 +28,7 @@ function sync() {
 
 function buildAdmin() {
     sync();
-    return buildReact(`${__dirname}/src-admin/`, { rootDir: `${__dirname}/src-admin/`, vite: true, tsc: true });
+    return buildReact(`${__dirname}/src-admin/`, { rootDir: `${__dirname}/src-admin/`, vite: true });
 }
 
 function cleanAdmin() {
@@ -50,7 +50,7 @@ function copyAllAdminFiles() {
 }
 
 function clean() {
-    deleteFoldersRecursive(`${__dirname}/src/build`);
+    deleteFoldersRecursive(`${__dirname}/src-tab/build`);
     deleteFoldersRecursive(`${__dirname}/admin`, [
         'backitup.png',
         '.json',
@@ -73,20 +73,20 @@ function clean() {
 
 function copyAllFiles() {
     copyFiles([
-        'src/build/*',
-        `!src/build/index.html`,
-        `!src/build/static/js/*.map`,
+        'src-tab/build/*',
+        `!src-tab/build/index.html`,
+        `!src-tab/build/static/js/*.map`,
     ], 'admin/');
-    copyFiles(['src/build/assets/*'], 'admin/assets');
-    // copyFiles(['src/build/assets/*.js'], 'admin/assets');
-    // copyFiles(['src/build/assets/*.txt'], 'admin/assets');
-    // copyFiles(['src/build/assets/*.css'], 'admin/assets');
-    // copyFiles(['src/build/assets/*.png'], 'admin/assets');
+    copyFiles(['src-tab/build/assets/*'], 'admin/assets');
+    // copyFiles(['src-tab/build/assets/*.js'], 'admin/assets');
+    // copyFiles(['src-tab/build/assets/*.txt'], 'admin/assets');
+    // copyFiles(['src-tab/build/assets/*.css'], 'admin/assets');
+    // copyFiles(['src-tab/build/assets/*.png'], 'admin/assets');
 }
 
 function patchFiles() {
-    if (fs.existsSync(`${__dirname}/src/build/index.html`)) {
-        let code = fs.readFileSync(`${__dirname}/src/build/index.html`).toString('utf8');
+    if (fs.existsSync(`${__dirname}/src-tab/build/index.html`)) {
+        let code = fs.readFileSync(`${__dirname}/src-tab/build/index.html`).toString('utf8');
         code = code.replace(/<script>\s*(?:var|const|let) script\s?=\s?document\.createElement\(["']script["']\)[^<]+<\/script>/,
             `<script type="text/javascript" src="./../../lib/js/socket.io.js"></script>`);
 
@@ -114,13 +114,11 @@ if (process.argv.includes('--admin-0-clean')) {
 } else if (process.argv.includes('--0-clean')) {
     clean();
 } else if (process.argv.includes('--1-npm')) {
-    if (!fs.existsSync(`${__dirname}/src/node_modules`)) {
-        npmInstall(`${__dirname}/src/`)
-            .catch(e => console.error(e));
+    if (!fs.existsSync(`${__dirname}/src-tab/node_modules`)) {
+        npmInstall(`${__dirname}/src-tab/`).catch(e => console.error(e));
     }
 } else if (process.argv.includes('--2-build')) {
-    buildReact(`${__dirname}/src/`, { rootDir: __dirname, vite: true, tsc: true })
-        .catch(e => console.error(e));
+    buildReact(`${__dirname}/src-tab/`, { rootDir: __dirname, vite: true }).catch(e => console.error(e));
 } else if (process.argv.includes('--3-copy')) {
     copyAllFiles();
 } else if (process.argv.includes('--4-patch')) {
@@ -128,13 +126,13 @@ if (process.argv.includes('--admin-0-clean')) {
 } else if (process.argv.includes('--build')) {
     clean();
     let installPromise;
-    if (!fs.existsSync(`${__dirname}/src/node_modules`)) {
-        installPromise = npmInstall(`${__dirname}/src/`)
-            .catch(e => console.error(e));
+    if (!fs.existsSync(`${__dirname}/src-tab/node_modules`)) {
+        installPromise = npmInstall(`${__dirname}/src-tab/`).catch(e => console.error(e));
     } else {
         installPromise = Promise.resolve();
     }
-    installPromise.then(() => buildReact(`${__dirname}/src/`, { rootDir: __dirname, vite: true, tsc: true }))
+    installPromise
+        .then(() => buildReact(`${__dirname}/src-tab/`, { rootDir: __dirname, vite: true }))
         .then(() => copyAllFiles())
         .then(() => patchFiles())
         .catch(e => console.error(e));
@@ -145,11 +143,11 @@ if (process.argv.includes('--admin-0-clean')) {
         .then(() => copyAllAdminFiles())
         .then(() => clean())
         .then(() => {
-            if (!fs.existsSync(`${__dirname}/src/node_modules`)) {
-                return npmInstall(`${__dirname}/src/`);
+            if (!fs.existsSync(`${__dirname}/src-tab/node_modules`)) {
+                return npmInstall(`${__dirname}/src-tab/`);
             }
         })
-        .then(() => buildReact(`${__dirname}/src/`, { rootDir: __dirname, vite: true, tsc: true }))
+        .then(() => buildReact(`${__dirname}/src-tab/`, { rootDir: __dirname, vite: true }))
         .then(() => copyAllFiles())
         .then(() => patchFiles())
         .catch(e => console.error(e));
