@@ -1,5 +1,5 @@
 import type { JSX } from 'react';
-import { I18n } from '@iobroker/adapter-react-v5';
+import { I18n } from '@iobroker/gui-components';
 
 import BaseField from './BaseField';
 import type { ConfigGenericProps } from '@iobroker/json-config';

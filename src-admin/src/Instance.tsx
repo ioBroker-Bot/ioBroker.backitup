@@ -2,7 +2,7 @@ import React from 'react';
 
 import { FormControl, FormHelperText, InputLabel, MenuItem, Select, TextField } from '@mui/material';
 
-import { I18n } from '@iobroker/adapter-react-v5';
+import { I18n } from '@iobroker/gui-components';
 import { ConfigGeneric, type ConfigGenericProps, type ConfigItemCustom } from '@iobroker/json-config';
 
 import BaseField, { type BaseFieldState } from './BaseField';
@@ -25,7 +25,7 @@ class Instance extends BaseField<ConfigGenericProps, InstanceState> {
 
     async componentDidMount(): Promise<void> {
         await super.componentDidMount();
-        const instance = ConfigGeneric.getValue(this.props.data, this.props.attr!);
+        const instance = ConfigGeneric.getValue(this.props.data, this.props.attr);
         const target = ConfigGeneric.getValue(
             this.props.data,
             (this.props.schema as ConfigItemCustomInstance).custom.adapter === 'telegram'
@@ -156,7 +156,7 @@ class Instance extends BaseField<ConfigGenericProps, InstanceState> {
                                     { instance: e.target.value === '_' ? '' : e.target.value },
                                     async (): Promise<void> => {
                                         await this.readTargets();
-                                        await this.onChange(this.props.attr!, this.state.instance);
+                                        await this.onChange(this.props.attr, this.state.instance);
                                     },
                                 )
                             }
@@ -173,9 +173,9 @@ class Instance extends BaseField<ConfigGenericProps, InstanceState> {
                         {(this.props.schema as ConfigItemCustomInstance).help ? (
                             <FormHelperText>
                                 {this.renderHelp(
-                                    (this.props.schema as ConfigItemCustomInstance).help!,
-                                    (this.props.schema as ConfigItemCustomInstance).helpLink!,
-                                    (this.props.schema as ConfigItemCustomInstance).noTranslation!,
+                                    (this.props.schema as ConfigItemCustomInstance).help,
+                                    (this.props.schema as ConfigItemCustomInstance).helpLink,
+                                    (this.props.schema as ConfigItemCustomInstance).noTranslation,
                                 )}
                             </FormHelperText>
                         ) : null}
@@ -225,9 +225,9 @@ class Instance extends BaseField<ConfigGenericProps, InstanceState> {
                         {(this.props.schema as ConfigItemCustomInstance).help ? (
                             <FormHelperText>
                                 {this.renderHelp(
-                                    (this.props.schema as ConfigItemCustomInstance).help!,
-                                    (this.props.schema as ConfigItemCustomInstance).helpLink!,
-                                    (this.props.schema as ConfigItemCustomInstance).noTranslation!,
+                                    (this.props.schema as ConfigItemCustomInstance).help,
+                                    (this.props.schema as ConfigItemCustomInstance).helpLink,
+                                    (this.props.schema as ConfigItemCustomInstance).noTranslation,
                                 )}
                             </FormHelperText>
                         ) : null}

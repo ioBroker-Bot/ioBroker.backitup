@@ -4,7 +4,7 @@ import { Button } from '@mui/material';
 
 import { Search } from '@mui/icons-material';
 
-import { I18n } from '@iobroker/adapter-react-v5';
+import { I18n } from '@iobroker/gui-components';
 
 import BaseField from './BaseField';
 import type { ConfigItemCustom } from '@iobroker/json-config';

@@ -3,7 +3,7 @@ import React from 'react';
 import { Button, Checkbox, FormControlLabel } from '@mui/material';
 import { Search } from '@mui/icons-material';
 
-import { I18n } from '@iobroker/adapter-react-v5';
+import { I18n } from '@iobroker/gui-components';
 import {
     ConfigGeneric,
     type ConfigGenericProps,

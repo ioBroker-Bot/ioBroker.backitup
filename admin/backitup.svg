@@ -1,13 +1,17 @@
-<svg version="1.0" xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64"
->
-    <g transform="translate(0.000000,64.000000) scale(0.100000,-0.100000)"
-       fill="#000000" stroke="none">
-        <path d="M179 610 c-159 -82 -224 -267 -149 -425 121 -253 472 -246 586 12 34
-77 34 184 -1 254 -37 71 -90 126 -157 160 -50 25 -68 29 -140 29 -71 -1 -91
--5 -139 -30z m263 -106 c28 -19 53 -48 71 -83 46 -93 32 -178 -42 -252 -82
--82 -199 -91 -281 -22 -27 23 -30 28 -17 40 13 13 20 11 56 -11 133 -84 298
-37 259 191 -31 123 -190 171 -281 85 -50 -48 -74 -112 -41 -112 9 0 14 -3 12
--7 -27 -57 -44 -83 -51 -80 -5 1 -20 22 -34 45 -20 34 -22 42 -9 42 9 0 19 14
-25 38 17 60 56 108 113 137 73 37 158 33 220 -11z" />
+<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64" role="img" aria-label="BackItUp">
+    <circle cx="32" cy="32" r="32" fill="#FF013E" />
+    <g fill="none" stroke="#FFF" stroke-width="2">
+        <!-- clock face: ring left open at the lower left, where the arrow head sits -->
+        <path d="M12.29 30.1A19.8 19.8 0 1 1 17.4 45.38" stroke-width="4.3" />
+        <!-- minute hand -->
+        <path d="M32 16.6V32" />
+        <!-- hour hand -->
+        <path d="M32 32L40.1 40.1" stroke-linecap="round" />
+    </g>
+    <g fill="#FFF">
+        <!-- arrow head, pointing counterclockwise -->
+        <path d="M6.9 30H18.4L12.6 39.9Z" />
+        <!-- hub -->
+        <circle cx="32" cy="32" r="2.45" />
     </g>
 </svg>

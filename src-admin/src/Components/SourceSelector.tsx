@@ -1,7 +1,7 @@
 import React, { Component } from 'react';
 import { FormControl, InputLabel, MenuItem, Select } from '@mui/material';
 
-import { I18n } from '@iobroker/adapter-react-v5';
+import { I18n } from '@iobroker/gui-components';
 
 interface SourceSelectorProps {
     value: string;

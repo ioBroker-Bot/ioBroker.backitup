@@ -2,7 +2,7 @@ import { Alert } from '@mui/material';
 
 import { Info, Warning } from '@mui/icons-material';
 
-import { I18n, DialogMessage } from '@iobroker/adapter-react-v5';
+import { I18n, DialogMessage } from '@iobroker/gui-components';
 import { ConfigGeneric, type ConfigGenericProps, type ConfigGenericState } from '@iobroker/json-config';
 import type { BackitupNative } from './Components/types';
 import React from 'react';
@@ -433,7 +433,7 @@ class BaseField<
     }
 
     checkAdapterInstall = async (name: string, ignoreHosts: boolean): Promise<void> => {
-        const backItUpHost = this.props.common.host;
+        const backItUpHost = this.props.common?.host;
         const ignore = false;
         let adapterName = name;
 

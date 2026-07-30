@@ -28,7 +28,7 @@ function sync() {
 
 function buildAdmin() {
     sync();
-    return buildReact(`${__dirname}/src-admin/`, { rootDir: `${__dirname}/src-admin/`, vite: true });
+    return buildReact(`${__dirname}/src-admin/`, { rootDir: `${__dirname}/src-admin/`, vite: true, tsc: true });
 }
 
 function cleanAdmin() {
@@ -43,6 +43,9 @@ function copyAllAdminFiles() {
     copyFiles(['src-admin/build/assets/*.png'], 'admin/custom/assets');
     copyFiles(['src-admin/build/customComponents.js'], 'admin/custom');
     //copyFiles(['src-admin/build/customComponents.js.map'], 'admin/custom');
+    // The GUI API gate of @iobroker/json-config reads this manifest to detect which component
+    // library the remote was built against, so it must sit next to the remote entry.
+    copyFiles(['src-admin/build/mf-manifest.json'], 'admin/custom');
     copyFiles(['src-admin/src/i18n/*.json'], 'admin/custom/i18n');
 }
 
@@ -84,7 +87,7 @@ function copyAllFiles() {
 function patchFiles() {
     if (fs.existsSync(`${__dirname}/src/build/index.html`)) {
         let code = fs.readFileSync(`${__dirname}/src/build/index.html`).toString('utf8');
-        code = code.replace(/<script>var script=document\.createElement\("script"\)[^<]+<\/script>/,
+        code = code.replace(/<script>\s*(?:var|const|let) script\s?=\s?document\.createElement\(["']script["']\)[^<]+<\/script>/,
             `<script type="text/javascript" src="./../../lib/js/socket.io.js"></script>`);
 
         fs.existsSync(`${__dirname}/admin/tab_m.html`) && fs.unlinkSync(`${__dirname}/admin/tab_m.html`);

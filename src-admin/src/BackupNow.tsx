@@ -12,7 +12,7 @@ import {
 } from '@mui/material';
 import { CloudUploadOutlined } from '@mui/icons-material';
 
-import { I18n } from '@iobroker/adapter-react-v5';
+import { I18n } from '@iobroker/gui-components';
 
 import {
     ConfigGeneric,
@@ -110,7 +110,7 @@ interface ConfigItemCustomBackupNow extends ConfigItemCustom {
 
 class BackupNow extends ConfigGeneric<ConfigGenericProps, BackupNowState> {
     lastExecutionLine: string;
-    textRef: React.RefObject<HTMLDivElement>;
+    textRef: React.RefObject<HTMLDivElement | null>;
     closeTimeout?: ReturnType<typeof setTimeout> | null;
 
     constructor(props: ConfigGenericProps) {

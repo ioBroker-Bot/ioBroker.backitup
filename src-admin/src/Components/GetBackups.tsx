@@ -24,7 +24,7 @@ import { Close, Download, History, ExpandMore, Save } from '@mui/icons-material'
 import { FaDropbox, FaNetworkWired, FaGoogleDrive } from 'react-icons/fa';
 import { DiOnedrive, DiRedis, DiMysql, DiPostgresql, DiSqllite } from 'react-icons/di';
 import { SiNodered, SiEsphome, SiZigbee, SiGrafana, SiInfluxdb, SiNextcloud } from 'react-icons/si';
-import { type AdminConnection, I18n } from '@iobroker/adapter-react-v5';
+import { type AdminConnection, I18n } from '@iobroker/gui-components';
 
 import CCU from '../assets/ccu.png';
 import ioBrokerIcon from '../assets/iobroker.png';

@@ -3,26 +3,20 @@
 {
     "compilerOptions": {
         "module": "esnext",
-        "moduleResolution": "node",
-        // check JS files
-        "allowJs": true,
-        // This is necessary for the automatic typing of the adapter config
+        "allowJs": false,
         "resolveJsonModule": true,
-        // If you want to disable the stricter type checks (not recommended), uncomment the following line
-        // "strict": false,
-        // And enable some of those features for more fine-grained control
         "strictNullChecks": true,
-        // "strictPropertyInitialization": true,
-        // "strictBindCallApply": true,
-        // "noUnusedLocals": true,
-        // "noUnusedParameters": true,
+        "strict": true,
         "useUnknownInCatchVariables": false,
-        "target": "ES2022",
-        "baseUrl": "./",
+        "target": "es2022",
+        "moduleResolution": "Bundler",
         "allowSyntheticDefaultImports": true,
         "checkJs": false,
-        "noEmit": false,
-        "outDir": "./build",
+        // Only type-check: the bundle is produced by vite. `buildReact` starts vite and tsc in
+        // parallel, so an emit here races the vite build and leaves stray .js/.map files in ./build
+        // that then get copied into admin/.
+        "noEmit": true,
+        "rootDir": "./src",
         "sourceMap": true,
         "sourceRoot": "./src",
         "noImplicitAny": true,
@@ -30,7 +24,7 @@
         "verbatimModuleSyntax": true,
         "lib": ["es2018", "DOM"],
         "jsx": "react",
-        "types": ["@iobroker/types"]
+        "types": ["vite/client", "@iobroker/types"]
     },
     "include": ["./src/**/*.js", "./src/**/*.d.ts", "./src/**/*.tsx", "./src/**/*.jsx", "./src/**/*.json", "./src/**/*.css", "./*.js"],
     "exclude": ["**/node_modules", "**/dist"]

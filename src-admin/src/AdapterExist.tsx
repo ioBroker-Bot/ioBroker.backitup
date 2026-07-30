@@ -2,12 +2,14 @@ import React from 'react';
 
 import { Checkbox, FormControlLabel } from '@mui/material';
 
-import { I18n } from '@iobroker/adapter-react-v5';
+import { I18n } from '@iobroker/gui-components';
 
 import BaseField from './BaseField';
 import type { ConfigItemCustom } from '@iobroker/json-config';
 
 interface ConfigItemCustomAdapterExist extends ConfigItemCustom {
+    /** Title of the message dialog, shown when `custom.alert` is set */
+    title: string;
     custom: {
         adapter: string;
         allHosts?: boolean;

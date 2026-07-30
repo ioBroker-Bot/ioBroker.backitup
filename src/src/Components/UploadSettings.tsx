@@ -5,7 +5,7 @@ import { Button, CircularProgress, Dialog, DialogActions, DialogContent, DialogT
 
 import { Check, Close, Source } from '@mui/icons-material';
 
-import { type AdminConnection, I18n, type ThemeType, Utils } from '@iobroker/adapter-react-v5';
+import { type AdminConnection, I18n, type ThemeType, Utils } from '@iobroker/gui-components';
 
 interface UploadSettingsProps {
     onClose: () => void;
