@@ -1,0 +1,13 @@
+// Build config: compiles the backend TypeScript in place, so lib/foo.ts -> lib/foo.js.
+// That keeps the runtime layout untouched - main.js stays the entry point, the dynamic
+// script loaders in lib/execute.js and lib/restore.js keep finding their .js files,
+// and neither io-package.json nor the "files" list in package.json needs to change.
+{
+    "extends": "./tsconfig.json",
+    "compilerOptions": {
+        "noEmit": false,
+        "noEmitOnError": true,
+        "declaration": false,
+    },
+    "exclude": ["node_modules/**", "admin/**", "src-admin/**", "src-tab/**", "test/**", "build/**"]
+}

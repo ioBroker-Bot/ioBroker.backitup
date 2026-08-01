@@ -2,7 +2,7 @@ import React from 'react';
 import { saveAs } from 'file-saver';
 import { ThemeProvider, StyledEngineProvider } from '@mui/material/styles';
 
-import { Card, CardContent, Button, AppBar, Toolbar, Tooltip, Fab, Box } from '@mui/material';
+import { Card, CardContent, Button, AppBar, Toolbar, Tooltip, Fab, Box, CssBaseline } from '@mui/material';
 
 import {
     CloudUploadOutlined,
@@ -24,6 +24,7 @@ import {
     I18n,
     Loader,
     AdminConnection,
+    ScrollbarStyles,
     type IobTheme,
     type GenericAppProps,
     type GenericAppState,
@@ -229,7 +230,7 @@ interface AppState extends GenericAppState {
     showLogs: null | { fileName: string; timestamp: number; index: number };
 }
 
-class App extends GenericApp<GenericAppProps, AppState> {
+export default class App extends GenericApp<GenericAppProps, AppState> {
     constructor(props: GenericAppProps) {
         const extendedProps = { ...props };
         extendedProps.encryptedFields = ['pass'];
@@ -541,6 +542,8 @@ class App extends GenericApp<GenericAppProps, AppState> {
         return (
             <StyledEngineProvider injectFirst>
                 <ThemeProvider theme={this.state.theme}>
+                    <CssBaseline />
+                    <ScrollbarStyles theme={this.state.theme} />
                     <div
                         className="App"
                         style={{
@@ -977,5 +980,3 @@ class App extends GenericApp<GenericAppProps, AppState> {
         );
     }
 }
-
-export default App;
