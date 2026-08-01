@@ -76,10 +76,11 @@ async function startBackup(options, log, callback) {
                 }
                 log.debug('InfluxDB Backup tmp directory created ');
             }
-            // NOTE: the 2.x variant puts the access token straight into the command line. When the
-            // command fails, `error.toString()` starts with "Command failed: <command>" and is
-            // stored in `context.errors.influxDB` - which the notification channels print without
-            // masking it (unlike the mysql/pgsql passwords, which are scrubbed at the source).
+            // NOTE: the 2.x variant puts the access token straight into the command line, so
+            // `error.toString()` of a failed run starts with "Command failed: <command>" and
+            // carries the token. It is scrubbed before it reaches `context.errors.influxDB`, the
+            // same way 30-mysql and 30-pgsql scrub their passwords - the notification channels
+            // print that value verbatim.
             let influxDBCMD;
             if (options.dbversion === '2.x') {
                 influxDBCMD = `${options.exe ? `"${options.exe}"` : 'influx'} backup --bucket ${options.dbName}${options.dbType === 'remote' ? ` --host ${options.protocol}://${options.host}:${options.port}${options.protocol === 'https' ? ' --skip-verify' : ''}` : ''} -t ${options.token} "${tmpDir}"`;
@@ -93,6 +94,10 @@ async function startBackup(options, log, callback) {
                     options.dbType === 'local')) {
                 (0, node_child_process_1.exec)(influxDBCMD, { maxBuffer: 10 * 1024 * 1024 }, async (error, stdout, stderr) => {
                     if (error) {
+                        // Scrubbed on the message itself, not just where it is stored: the same
+                        // error is handed to the callback below, and lib/execute puts that into the
+                        // adapter log, the output.line state and the backup history file.
+                        error.message = (0, tools_1.maskSecret)(error.message, options.token);
                         // `ExecException` is declared as Omit<ErrnoException, 'code'>, which drops
                         // the nominal Error identity; binding it back keeps toString() identical.
                         const failure = error;

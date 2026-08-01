@@ -7,6 +7,7 @@ const node_fs_1 = require("node:fs");
 const node_path_1 = require("node:path");
 const fs_extra_1 = require("fs-extra");
 const targz_1 = require("../targz");
+const tools_1 = require("../tools");
 /**
  * Runs the influx restore command against the unpacked dump.
  *
@@ -79,6 +80,11 @@ function replayInfluxDB(options, tmpDir, log, callback) {
                 // The original kept the ChildProcess in an unused `child` binding.
                 (0, node_child_process_1.exec)(cmd, (error, stdout, stderr) => {
                     if (error) {
+                        // The 2.x command line carries the access token and `error.message` starts
+                        // with "Command failed: <command>". The caller currently drops this error,
+                        // so nothing leaks today - scrubbed anyway so it stays safe if it is ever
+                        // logged or reported. See lib/scripts/12-influxDB, where it did leak.
+                        error.message = (0, tools_1.maskSecret)(error.message, options.token);
                         log.error(stderr);
                     }
                     callback?.(error);
@@ -94,6 +100,8 @@ function replayInfluxDB(options, tmpDir, log, callback) {
             // The original kept the ChildProcess in an unused `child` binding.
             (0, node_child_process_1.exec)(cmd, (error, stdout, stderr) => {
                 if (error) {
+                    // Same scrubbing as in the branch above.
+                    error.message = (0, tools_1.maskSecret)(error.message, options.token);
                     log.error(stderr);
                 }
                 callback?.(error);

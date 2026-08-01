@@ -1,7 +1,10 @@
-// Build config: compiles the backend TypeScript in place, so lib/foo.ts -> lib/foo.js.
-// That keeps the runtime layout untouched - main.js stays the entry point, the dynamic
-// script loaders in lib/execute.js and lib/restore.js keep finding their .js files,
-// and neither io-package.json nor the "files" list in package.json needs to change.
+// Build config: compiles the backend from src/ into build/, mirroring the tree, so
+// src/lib/foo.ts -> build/lib/foo.js. rootDir and outDir come from tsconfig.json.
+//
+// The relative layout inside build/ is what the runtime depends on: build/main.js is the
+// entry point named in package.json, build/lib/execute.js loads build/lib/scripts/*.js
+// through __dirname, and build/lib/restore.js copies itself plus build/lib/restore/iobroker.js
+// into the bash directory for the detached restore. Keep the tree shape when moving things.
 {
     "extends": "./tsconfig.json",
     "compilerOptions": {

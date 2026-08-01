@@ -17,7 +17,7 @@ const ROOT = path.join(__dirname, '..');
  */
 describe('Adapter config typing', () => {
     const native = JSON.parse(readFileSync(path.join(ROOT, 'io-package.json'), 'utf8')).native;
-    const types = readFileSync(path.join(ROOT, 'lib', 'types.d.ts'), 'utf8');
+    const types = readFileSync(path.join(ROOT, 'src', 'lib', 'types.d.ts'), 'utf8');
 
     const start = types.indexOf('export interface BackItUpAdapterOptions');
     const body = types.slice(start, types.indexOf('\n}', start));

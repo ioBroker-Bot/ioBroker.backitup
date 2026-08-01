@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { ensureDirSync, removeSync } from 'fs-extra';
 
 import { decompress } from '../targz';
+import { maskSecret } from '../tools';
 import type { BackItUpRestoreCallback, BackItUpRestoreLogger, BackItUpRestoreOptions } from './types';
 
 /** Both are validated by the command builder below, so the empty string is part of the domain. */
@@ -126,6 +127,11 @@ function replayInfluxDB(
                 // The original kept the ChildProcess in an unused `child` binding.
                 exec(cmd!, (error, stdout, stderr) => {
                     if (error) {
+                        // The 2.x command line carries the access token and `error.message` starts
+                        // with "Command failed: <command>". The caller currently drops this error,
+                        // so nothing leaks today - scrubbed anyway so it stays safe if it is ever
+                        // logged or reported. See lib/scripts/12-influxDB, where it did leak.
+                        error.message = maskSecret(error.message, options.token);
                         log.error(stderr);
                     }
                     callback?.(error);
@@ -139,6 +145,8 @@ function replayInfluxDB(
             // The original kept the ChildProcess in an unused `child` binding.
             exec(cmd!, (error, stdout, stderr) => {
                 if (error) {
+                    // Same scrubbing as in the branch above.
+                    error.message = maskSecret(error.message, options.token);
                     log.error(stderr);
                 }
                 callback?.(error);

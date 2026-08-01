@@ -46,8 +46,9 @@ const tools = __importStar(require("./lib/tools"));
 const execute_1 = __importDefault(require("./lib/execute"));
 const systemCheck = __importStar(require("./lib/systemCheck"));
 const tokenRefresher_1 = __importDefault(require("./lib/tokenRefresher"));
+// One level up: this file compiles to build/main.js, package.json stays at the adapter root.
 // eslint-disable-next-line @typescript-eslint/no-require-imports
-const adapterName = require('./package.json').name.split('.').pop();
+const adapterName = require('../package.json').name.split('.').pop();
 // Assigned in startAdapter(), which every other function here runs after.
 let adapter;
 let timerOutput;
@@ -100,7 +101,7 @@ async function updateAccessTokens(config) {
                     }
                     else {
                         Object.keys(config[key]).forEach(subKey => {
-                            if (config[key][subKey] && config[key][subKey].dropbox) {
+                            if (config[key][subKey]?.dropbox) {
                                 config[key][subKey].dropbox.accessToken = accessToken;
                             }
                         });
@@ -155,7 +156,7 @@ function readRunResult(type, onSuccess, onFailure) {
         else {
             void adapter.setState(`history.${type}LastTime`, `error: ${tools.getTimeString(systemLang)}`, true);
             void adapter.setState(`history.${type}Success`, false, true);
-            onFailure?.(state && state.val ? state.val : null);
+            onFailure?.(state?.val ? state.val : null);
         }
     });
 }
@@ -629,15 +630,16 @@ function startAdapter(options) {
 /**
  * Rejects a message that arrived without the parameters its command needs.
  *
- * NOTE: `obj.callback` is the `{ message, id, ack, time }` descriptor js-controller attaches, not a
- * function, so this throws "obj.callback is not a function" out of the async message handler and
- * the caller never gets an answer. Kept as found - the reply would have to go through
- * `adapter.sendTo(obj.from, obj.command, ..., obj.callback)` like every other branch does.
+ * Up to and including 4.x these branches called `obj.callback({ error: 'Invalid parameters' })`.
+ * `obj.callback` is the `{ message, id, ack, time }` descriptor js-controller attaches, not a
+ * function, so the call threw "obj.callback is not a function" out of the async message handler
+ * and the sender never got an answer. The reply now goes out the same way as in every other
+ * branch of this handler.
  *
  * @param obj the incoming message
  */
 function invalidParameters(obj) {
-    obj.callback({ error: 'Invalid parameters' });
+    adapter.sendTo(obj.from, obj.command, { error: 'Invalid parameters' }, obj.callback);
 }
 /**
  * Reads the listen port of a running server; both are bound to a TCP address.
@@ -764,7 +766,9 @@ async function initConfig(secret) {
     try {
         // ioPath = `${ioCommon.tools.getControllerDir()}/iobroker.js`; Todo: Error by iob Backup (no such file or directory, uv_cwd)
         // ioPath = require.resolve('iobroker.js-controller/iobroker.js');
-        ioPath = (0, node_path_1.resolve)(__dirname, '../iobroker.js-controller/iobroker.js');
+        // Two levels up: this file compiles to build/main.js, so `__dirname` is
+        // <adapter>/build and the sibling adapters live one directory above that.
+        ioPath = (0, node_path_1.resolve)(__dirname, '../../iobroker.js-controller/iobroker.js');
     }
     catch (e) {
         adapter.log.error(`Unable to read iobroker path: +${e}`);

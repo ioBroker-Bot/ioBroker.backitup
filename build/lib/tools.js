@@ -6,6 +6,7 @@ exports.getIobDir = getIobDir;
 exports.getTimeString = getTimeString;
 exports.getNextTimeString = getNextTimeString;
 exports._ = _;
+exports.maskSecret = maskSecret;
 exports.getSize = getSize;
 const node_fs_1 = require("node:fs");
 const node_path_1 = require("node:path");
@@ -104,6 +105,23 @@ function _(word, systemLang) {
     }
     console.warn(`Please translate in translations.json: ${word}`);
     return word;
+}
+/**
+ * Replaces every occurrence of a secret in a text with `****`.
+ *
+ * The influx CLI takes its access token as a command line argument, so anything derived from that
+ * command line has to pass through here first - `error.message` of a failed `exec` starts with
+ * "Command failed: <command>" and would otherwise carry the token into `context.errors` and from
+ * there into every notification channel.
+ *
+ * An empty or missing secret leaves the text untouched: `replaceAll('')` matches the gap between
+ * every pair of characters and would otherwise pepper the whole string with the mask.
+ *
+ * @param text the text to scrub
+ * @param secret the value to hide
+ */
+function maskSecret(text, secret) {
+    return secret ? text.replaceAll(secret, '****') : text;
 }
 function getSize(bytes) {
     if (bytes > 1024 * 1024 * 512) {

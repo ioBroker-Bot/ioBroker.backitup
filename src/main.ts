@@ -44,9 +44,6 @@ import type { BackItUpRestoreLogger } from './lib/restore/types';
 import type { BackItUpExecuteConfig, BackItUpStorage } from './lib/types';
 import type { BackItUpListResult, BackItUpStorageEngineResultFile } from './lib/list/types';
 
-// eslint-disable-next-line @typescript-eslint/no-require-imports
-const adapterName: string = (require('./package.json') as { name: string }).name.split('.').pop()!;
-
 // Assigned in startAdapter(), which every other function here runs after.
 let adapter!: ioBroker.Adapter;
 
@@ -72,7 +69,7 @@ const backupTimeSchedules = [] as unknown as Record<string, schedule.Job | null>
 let taskRunning = false;
 let dropBoxTokenRefresher: TokenRefresher | null = null;
 
-const bashDir = join(utils.getAbsoluteDefaultDataDir(), adapterName).replace(/\\/g, '/');
+const bashDir = join(utils.getAbsoluteDefaultDataDir(), 'backitup').replace(/\\/g, '/');
 
 /**
  * Decrypt the password/value with given key
@@ -104,7 +101,7 @@ async function updateAccessTokens(config: Record<string, any>): Promise<void> {
                         config[key].dropbox.accessToken = accessToken;
                     } else {
                         Object.keys(config[key]).forEach(subKey => {
-                            if (config[key][subKey] && config[key][subKey].dropbox) {
+                            if (config[key][subKey]?.dropbox) {
                                 config[key][subKey].dropbox.accessToken = accessToken;
                             }
                         });
@@ -166,14 +163,14 @@ function readRunResult(
         } else {
             void adapter.setState(`history.${type}LastTime`, `error: ${tools.getTimeString(systemLang)}`, true);
             void adapter.setState(`history.${type}Success`, false, true);
-            onFailure?.(state && state.val ? (state.val as string) : null);
+            onFailure?.(state?.val ? (state.val as string) : null);
         }
     });
 }
 
 function startAdapter(options?: Partial<utils.AdapterOptions>): ioBroker.Adapter {
     options = options || {};
-    Object.assign(options, { name: adapterName });
+    Object.assign(options, { name: 'backitup' });
 
     adapter = new utils.Adapter(options as utils.AdapterOptions);
 
@@ -187,7 +184,7 @@ function startAdapter(options?: Partial<utils.AdapterOptions>): ioBroker.Adapter
 
         if (state && (state.val === true || state.val === 'true') && !state.ack) {
             if (id === `${adapter.namespace}.oneClick.iobroker` || id === `${adapter.namespace}.oneClick.ccu`) {
-                const sysCheck = await systemCheck.storageSizeCheck(adapter, adapterName, adapter.log);
+                const sysCheck = await systemCheck.storageSizeCheck(adapter, 'backitup', adapter.log);
 
                 const type = id.split('.').pop()!;
 
@@ -552,7 +549,7 @@ function startAdapter(options?: Partial<utils.AdapterOptions>): ioBroker.Adapter
 
                 case 'getFileSystemInfo':
                     if (obj) {
-                        const sysCheck = await systemCheck.storageSizeCheck(adapter, adapterName, adapter.log);
+                        const sysCheck = await systemCheck.storageSizeCheck(adapter, 'backitup', adapter.log);
 
                         if (sysCheck) {
                             try {
@@ -722,15 +719,16 @@ function startAdapter(options?: Partial<utils.AdapterOptions>): ioBroker.Adapter
 /**
  * Rejects a message that arrived without the parameters its command needs.
  *
- * NOTE: `obj.callback` is the `{ message, id, ack, time }` descriptor js-controller attaches, not a
- * function, so this throws "obj.callback is not a function" out of the async message handler and
- * the caller never gets an answer. Kept as found - the reply would have to go through
- * `adapter.sendTo(obj.from, obj.command, ..., obj.callback)` like every other branch does.
+ * Up to and including 4.x these branches called `obj.callback({ error: 'Invalid parameters' })`.
+ * `obj.callback` is the `{ message, id, ack, time }` descriptor js-controller attaches, not a
+ * function, so the call threw "obj.callback is not a function" out of the async message handler
+ * and the sender never got an answer. The reply now goes out the same way as in every other
+ * branch of this handler.
  *
  * @param obj the incoming message
  */
 function invalidParameters(obj: ioBroker.Message): void {
-    (obj.callback as unknown as (response: unknown) => void)({ error: 'Invalid parameters' });
+    adapter.sendTo(obj.from, obj.command, { error: 'Invalid parameters' }, obj.callback);
 }
 
 /**
@@ -812,7 +810,7 @@ function createBackupSchedule(): void {
             }
             const cron = config.ownCron ? time : `10 ${time[1]} ${time[0]} */${config.everyXDays} * * `;
             backupTimeSchedules[type] = schedule.scheduleJob(cron, async () => {
-                const sysCheck = await systemCheck.storageSizeCheck(adapter, adapterName, adapter.log);
+                const sysCheck = await systemCheck.storageSizeCheck(adapter, 'backitup', adapter.log);
 
                 if ((sysCheck && sysCheck.ready && sysCheck.ready === true) || adapter.config.cifsEnabled === true) {
                     void adapter.setState(`oneClick.${type}`, true, true);

@@ -90,13 +90,14 @@
         "@types/node-schedule": "^2.1.8",
         "typescript": "~6.0.3"
     },
-    "main": "main.js",
+    "main": "build/main.js",
     "files": [
         "admin/",
         "!admin/**/*.map",
         "admin{,/!(i18n)/**}/flat.txt",
         "docs/",
         "build/",
+        "!build/**/*.map",
         "CHANGELOG_OLD.md",
         "io-package.json",
         "LICENSE"

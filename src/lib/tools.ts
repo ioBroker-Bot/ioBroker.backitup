@@ -118,6 +118,24 @@ export function _(word: string, systemLang?: string): string {
     return word;
 }
 
+/**
+ * Replaces every occurrence of a secret in a text with `****`.
+ *
+ * The influx CLI takes its access token as a command line argument, so anything derived from that
+ * command line has to pass through here first - `error.message` of a failed `exec` starts with
+ * "Command failed: <command>" and would otherwise carry the token into `context.errors` and from
+ * there into every notification channel.
+ *
+ * An empty or missing secret leaves the text untouched: `replaceAll('')` matches the gap between
+ * every pair of characters and would otherwise pepper the whole string with the mask.
+ *
+ * @param text the text to scrub
+ * @param secret the value to hide
+ */
+export function maskSecret(text: string, secret?: string | null): string {
+    return secret ? text.replaceAll(secret, '****') : text;
+}
+
 export function getSize(bytes: number): string {
     if (bytes > 1024 * 1024 * 512) {
         return `${Math.round((bytes / (1024 * 1024 * 1024)) * 10) / 10} GiB`;
