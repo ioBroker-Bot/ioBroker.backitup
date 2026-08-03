@@ -30,7 +30,7 @@ jobs:
         with:
           node-version: '24.x'
           # Uncomment the following line if your adapter cannot be installed using 'npm ci'
-          install-command: 'npm ci && cd src && npm ci && cd ../src-admin && npm ci'
+          install-command: 'npm i && cd src && npm i -f && cd ../src-admin && npm i -f'
           # type-checking: true
           lint: true
 
