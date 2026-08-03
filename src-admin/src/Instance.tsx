@@ -25,7 +25,7 @@ class Instance extends BaseField<ConfigGenericProps, InstanceState> {
 
     async componentDidMount(): Promise<void> {
         await super.componentDidMount();
-        const instance = ConfigGeneric.getValue(this.props.data, this.props.attr);
+        const instance = this.props.attr ? ConfigGeneric.getValue(this.props.data, this.props.attr) : '';
         const target = ConfigGeneric.getValue(
             this.props.data,
             (this.props.schema as ConfigItemCustomInstance).custom.adapter === 'telegram'
