@@ -1,6 +1,6 @@
-import { _ } from '../tools';
+import { _, delay } from '../tools';
 import { buildErrorMessage, buildStorageList, type NotificationOptions } from '../notificationText';
-import type { BackItUpScriptCallback } from './types';
+import type { BackItUpLogger, BackItUpProps } from '../types';
 
 interface DiscordOptions extends NotificationOptions {
     name: string;
@@ -19,54 +19,60 @@ interface DiscordOptions extends NotificationOptions {
     };
 }
 
-export function command(options: DiscordOptions, log: ioBroker.Logger, callback?: BackItUpScriptCallback): void {
-    setTimeout(() => {
-        if (
-            options.discord.enabled &&
-            options.discord.target &&
-            options.adapter &&
-            options.discord.instance !== '' &&
-            options.discord.instance !== null &&
-            options.discord.instance !== undefined
-        ) {
-            // Send Discord Message
-            if (options.debugging) {
-                log.debug(`[${options.name}] used Discord-Instance: ${options.discord.instance}`);
-            }
+/**
+ * Sends the notification for a finished run.
+ *
+ * @param props the run context and this step's slice of the config
+ */
+export async function run(props: BackItUpProps<DiscordOptions>): Promise<void> {
+    const { context: ctx, options } = props;
 
-            // analyse here the info from options.context.errors and options.context.done
-            const errors = Object.keys(options.context.errors);
+    await delay(options.discord.discordWaiting);
 
-            if (!errors.length) {
-                let messageText = `${_('New %e Backup created on %t', options.discord.systemLang)}.`;
-                messageText = messageText
-                    .replace('%t', options.discord.time as string)
-                    .replace(
-                        '%e',
-                        `${options.name}${options.name === 'iobroker' && options.discord.hostName ? ` (${options.discord.hostName})` : ''}`,
-                    );
-
-                if (options.discord?.NoticeType === 'longDiscordNotice') {
-                    messageText += buildStorageList(options, options.discord.systemLang, true);
-                }
-
-                // Note: unlike the other channels this one has no `onlyError` check and always sends.
-                sendMessage(options, log, messageText);
-            } else {
-                let errorMessage = buildErrorMessage(options, options.discord.systemLang);
-
-                // Active here, unlike in most channels.
-                try {
-                    errorMessage = errorMessage.replaceAll('undefined', '');
-                } catch {
-                    // ignore
-                }
-
-                sendMessage(options, log, errorMessage);
-            }
+    if (
+        options.discord.enabled &&
+        options.discord.target &&
+        ctx.adapter &&
+        options.discord.instance !== '' &&
+        options.discord.instance !== null &&
+        options.discord.instance !== undefined
+    ) {
+        // Send Discord Message
+        if (options.debugging) {
+            ctx.log.debug(`[${options.name}] used Discord-Instance: ${options.discord.instance}`);
         }
-        callback?.();
-    }, options.discord.discordWaiting);
+
+        // analyse here the info from ctx.errors and ctx.done
+        const errors = Object.keys(ctx.errors);
+
+        if (!errors.length) {
+            let messageText = `${_('New %e Backup created on %t', options.discord.systemLang)}.`;
+            messageText = messageText
+                .replace('%t', options.discord.time as string)
+                .replace(
+                    '%e',
+                    `${options.name}${options.name === 'iobroker' && options.discord.hostName ? ` (${options.discord.hostName})` : ''}`,
+                );
+
+            if (options.discord?.NoticeType === 'longDiscordNotice') {
+                messageText += buildStorageList(options, options.discord.systemLang, true);
+            }
+
+            // Note: unlike the other channels this one has no `onlyError` check and always sends.
+            sendMessage(options, ctx.log, messageText);
+        } else {
+            let errorMessage = buildErrorMessage(ctx, options, options.discord.systemLang);
+
+            // Active here, unlike in most channels.
+            try {
+                errorMessage = errorMessage.replaceAll('undefined', '');
+            } catch {
+                // ignore
+            }
+
+            sendMessage(options, ctx.log, errorMessage);
+        }
+    }
 }
 
 /**
@@ -76,7 +82,7 @@ export function command(options: DiscordOptions, log: ioBroker.Logger, callback?
  * @param log adapter logger
  * @param message text to deliver
  */
-function sendMessage(options: DiscordOptions, log: ioBroker.Logger, message: string): void {
+function sendMessage(options: DiscordOptions, log: BackItUpLogger, message: string): void {
     const target = options.discord.target as string;
 
     if (target.match(/^\d+$/)) {

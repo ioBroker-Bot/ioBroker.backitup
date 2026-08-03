@@ -1,10 +1,10 @@
 import { createWriteStream } from 'node:fs';
 import Client from 'ftp';
 
-import type { BackItUpConfigStorageFtp, BackItUpStorage } from '../types';
+import type { BackItUpConfigStorageFtp } from '../types';
 import type {
-    BackItUpGetFileCallback,
-    BackItUpListCallback,
+    BackItUpGetFileProps,
+    BackItUpListProps,
     BackItUpStorageEngineResult,
     BackItUpStorageEngineResultFile,
 } from './types';
@@ -130,24 +130,34 @@ function connectOptions(cfg: FtpSettings): Client.Options {
     };
 }
 
-export function list(
-    restoreSource: BackItUpStorage | '' | undefined,
-    options: FtpOptions,
-    types: string[],
-    log: ioBroker.Logger,
-    callback?: BackItUpListCallback,
-): void {
+/**
+ * Lists the backups stored on the FTP server.
+ *
+ * @param props run context, storage config, requested source and backup types
+ */
+export async function list(
+    props: BackItUpListProps<FtpOptions>,
+): Promise<BackItUpStorageEngineResult | undefined> {
+    const {
+        context: { log },
+        options,
+        restoreSource,
+        types,
+    } = props;
+
     const cfg = settings(options);
 
-    if (cfg.host && (!restoreSource || restoreSource === 'ftp')) {
-        const client = new Client();
+    if (!cfg.host || (restoreSource && restoreSource !== 'ftp')) {
+        // Not configured, or another storage was asked for - nothing to file.
+        return undefined;
+    }
 
-        const dir = targetDir(cfg.dir, cfg.ownDir, cfg.dirMinimal);
+    const client = new Client();
+    const dir = targetDir(cfg.dir, cfg.ownDir, cfg.dirMinimal);
 
-        // Only the error handler clears the callback, matching the original: an error after a
-        // successful listing is swallowed, a listing after an error is not.
-        let cb = callback;
-
+    // The callback version only cleared its callback in the error handler, so an error arriving
+    // after a successful listing reported a second time. A promise settles once, which ends that.
+    return new Promise<BackItUpStorageEngineResult | undefined>((resolve, reject) => {
         client.on('ready', () => {
             log.debug('FTP: connected.');
             client.list(dir, (err, result) => {
@@ -185,49 +195,46 @@ export function list(
                         log.error(`FTP: Files error: ${e} please check the ftp config and try again!!`);
                     }
 
-                    cb?.(null, files, 'ftp');
+                    resolve(files);
                 } else {
-                    cb?.();
+                    resolve(undefined);
                 }
             });
         });
 
-        client.on('error', err => {
-            if (cb) {
-                cb(err);
-                cb = undefined;
-            }
-        });
+        client.on('error', err => reject(err));
 
         client.connect(connectOptions(cfg));
-    } else {
-        setImmediate(() => callback?.());
-    }
+    });
 }
 
-export function getFile(
-    options: FtpOptions,
-    fileName: string,
-    toStoreName: string,
-    log: ioBroker.Logger,
-    callback?: BackItUpGetFileCallback,
-): void {
+/**
+ * Downloads one backup from the FTP server.
+ *
+ * @param props run context, storage config, the file to fetch and where to put it
+ */
+export async function getFile(props: BackItUpGetFileProps<FtpOptions>): Promise<void> {
+    const {
+        context: { log },
+        options,
+        fileName,
+        toStoreName,
+    } = props;
+
     const cfg = settings(options);
 
-    if (cfg.host) {
-        // copy file to backupDir
-        const client = new Client();
+    if (!cfg.host) {
+        // eslint-disable-next-line @typescript-eslint/only-throw-error
+        throw 'Not configured';
+    }
 
-        const dir = targetDir(cfg.dir, cfg.ownDir, cfg.dirMinimal);
+    // copy file to backupDir
+    const client = new Client();
+    const dir = targetDir(cfg.dir, cfg.ownDir, cfg.dirMinimal);
 
-        let cb = callback;
-        const finish = (err?: Error | string | null): void => {
-            if (cb) {
-                const fire = cb;
-                cb = undefined;
-                fire(err);
-            }
-        };
+    return new Promise<void>((resolve, reject) => {
+        // The promise takes over the single-fire guard the old `finish` helper provided.
+        const finish = (err?: Error | string | null): void => (err ? reject(err) : resolve());
 
         client.on('ready', () => {
             log.debug('FTP: connected.');
@@ -267,7 +274,5 @@ export function getFile(
         client.on('error', err => finish(err));
 
         client.connect(connectOptions(cfg));
-    } else {
-        setImmediate(() => callback?.('Not configured'));
-    }
+    });
 }

@@ -4,10 +4,10 @@ import { Agent } from 'node:https';
 // explicit resolution mode and the value import below has to remain a dynamic `import()`.
 import type { FileStat, WebDAVClient } from 'webdav' with { 'resolution-mode': 'import' };
 
-import type { BackItUpConfigStorageWebDav, BackItUpStorage } from '../types';
+import type { BackItUpConfigStorageWebDav } from '../types';
 import type {
-    BackItUpGetFileCallback,
-    BackItUpListCallback,
+    BackItUpGetFileProps,
+    BackItUpListProps,
     BackItUpStorageEngineResult,
     BackItUpStorageEngineResultFile,
 } from './types';
@@ -98,100 +98,40 @@ function targetDir(dir: string, ownDir: boolean, dirMinimal: string): string {
     return result;
 }
 
+/**
+ * Lists the backups stored on the WebDAV share.
+ *
+ * NOTE: when `createClient` failed, the callback version reported "nothing to file" and then
+ * carried on without returning. Dereferencing the client that was never created threw a TypeError,
+ * which reported a *second* time - and lib/list decremented its outstanding-request counter twice,
+ * so the whole listing could finish early with incomplete data. A promise settles once, and the
+ * early return below means that TypeError is never produced in the first place. The outcome kept
+ * is the one that was reported first: nothing to file, with the reason already in the log.
+ *
+ * @param props run context, storage config, requested source and backup types
+ */
 export async function list(
-    restoreSource: BackItUpStorage | '' | undefined,
-    options: WebDavOptions,
-    types: string[],
-    log: ioBroker.Logger,
-    callback?: BackItUpListCallback,
-): Promise<void> {
+    props: BackItUpListProps<WebDavOptions>,
+): Promise<BackItUpStorageEngineResult | undefined> {
+    const {
+        context: { log },
+        options,
+        restoreSource,
+        types,
+    } = props;
+
     try {
         const cfg = settings(options);
 
-        if (cfg.username && cfg.pass && cfg.url && (!restoreSource || restoreSource === 'webdav')) {
-            // webdav is ESM only, so it has to be pulled in with a dynamic import
-            const { createClient } = await import('webdav');
-            const agent = new Agent({ rejectUnauthorized: Boolean(cfg.signedCertificates) });
-            let client: WebDAVClient | undefined;
-            try {
-                client = createClient(cfg.url, {
-                    username: cfg.username,
-                    password: cfg.pass,
-                    maxBodyLength: Infinity,
-                    maxContentLength: Infinity,
-                    httpsAgent: agent,
-                });
-            } catch (err) {
-                log.error(`cannot conntect to WebDAV: ${err}`);
-                callback?.();
-                // No early return on purpose: the code below then dereferences the client that was
-                // never created, the resulting TypeError is caught by the try that follows, and the
-                // callback fires a second time - this time with that error. Preserved.
-            }
-
-            const dir = targetDir(cfg.dir, cfg.ownDir, cfg.dirMinimal);
-
-            try {
-                client!
-                    .getDirectoryContents(dir)
-                    .then(contents => {
-                        if (contents) {
-                            const entries: BackItUpStorageEngineResultFile[] = contents
-                                .map(file => ({
-                                    path: file.filename,
-                                    name: file.filename.replace(/\\/g, '/').split('/').pop() as string,
-                                    size: file.size,
-                                }))
-                                .filter(
-                                    file =>
-                                        (types.indexOf(file.name.split('_')[0]) !== -1 ||
-                                            types.indexOf(file.name.split('.')[0]) !== -1) &&
-                                        file.name.split('.').pop() == 'gz',
-                                );
-
-                            const files: BackItUpStorageEngineResult = {};
-                            entries.forEach(file => {
-                                const type = file.name.split('_')[0];
-                                files[type] = files[type] || [];
-                                files[type].push(file);
-                            });
-                            callback?.(null, files, 'webdav');
-                        } else {
-                            callback?.();
-                        }
-                    })
-                    .catch(err => {
-                        log.error(`cannot conntect to WebDAV: ${err}`);
-                        callback?.();
-                    });
-            } catch (e) {
-                setImmediate(() => callback?.(e as Error));
-            }
-        } else {
-            setImmediate(() => callback?.());
+        if (!cfg.username || !cfg.pass || !cfg.url || (restoreSource && restoreSource !== 'webdav')) {
+            // Not configured, or another storage was asked for - nothing to file.
+            return undefined;
         }
-    } catch (err) {
-        log.error(`WebDAV: ${err}`);
-        callback?.();
-    }
-}
 
-export async function getFile(
-    options: WebDavOptions,
-    fileName: string,
-    toStoreName: string,
-    log: ioBroker.Logger,
-    callback?: BackItUpGetFileCallback,
-): Promise<void> {
-    const cfg = settings(options);
-
-    if (cfg.username && cfg.pass && cfg.url) {
         // webdav is ESM only, so it has to be pulled in with a dynamic import
         const { createClient } = await import('webdav');
-        // Note: unlike in `list` the flag is passed through without Boolean() - kept as it was.
-        const agent = new Agent({ rejectUnauthorized: cfg.signedCertificates });
-        // copy file to backupDir
-        let client: WebDAVClient | undefined;
+        const agent = new Agent({ rejectUnauthorized: Boolean(cfg.signedCertificates) });
+        let client: WebDAVClient;
         try {
             client = createClient(cfg.url, {
                 username: cfg.username,
@@ -202,22 +142,97 @@ export async function getFile(
             });
         } catch (err) {
             log.error(`cannot conntect to WebDAV: ${err}`);
-            callback?.();
-            // As above: no early return, the following dereference throws into the try below.
+            return undefined;
         }
 
+        const dir = targetDir(cfg.dir, cfg.ownDir, cfg.dirMinimal);
+
+        let contents;
+        try {
+            contents = await client.getDirectoryContents(dir);
+        } catch (err) {
+            log.error(`cannot conntect to WebDAV: ${err}`);
+            return undefined;
+        }
+
+        if (!contents) {
+            return undefined;
+        }
+
+        const entries: BackItUpStorageEngineResultFile[] = contents
+            .map(file => ({
+                path: file.filename,
+                name: file.filename.replace(/\\/g, '/').split('/').pop() as string,
+                size: file.size,
+            }))
+            .filter(
+                file =>
+                    (types.indexOf(file.name.split('_')[0]) !== -1 ||
+                        types.indexOf(file.name.split('.')[0]) !== -1) &&
+                    file.name.split('.').pop() == 'gz',
+            );
+
+        const files: BackItUpStorageEngineResult = {};
+        entries.forEach(file => {
+            const type = file.name.split('_')[0];
+            files[type] = files[type] || [];
+            files[type].push(file);
+        });
+        return files;
+    } catch (err) {
+        log.error(`WebDAV: ${err}`);
+        return undefined;
+    }
+}
+
+/**
+ * Downloads one backup from the WebDAV share.
+ *
+ * Same repaired pattern as in `list`: a failing `createClient` reported success and then threw a
+ * TypeError that reported again. The early return keeps the outcome that was reported first.
+ *
+ * @param props run context, storage config, the file to fetch and where to put it
+ */
+export async function getFile(props: BackItUpGetFileProps<WebDavOptions>): Promise<void> {
+    const {
+        context: { log },
+        options,
+        fileName,
+        toStoreName,
+    } = props;
+
+    const cfg = settings(options);
+
+    if (!cfg.username || !cfg.pass || !cfg.url) {
+        // eslint-disable-next-line @typescript-eslint/only-throw-error
+        throw 'Not configured';
+    }
+
+    // webdav is ESM only, so it has to be pulled in with a dynamic import
+    const { createClient } = await import('webdav');
+    // Note: unlike in `list` the flag is passed through without Boolean() - kept as it was.
+    const agent = new Agent({ rejectUnauthorized: cfg.signedCertificates });
+    // copy file to backupDir
+    let client: WebDAVClient;
+    try {
+        client = createClient(cfg.url, {
+            username: cfg.username,
+            password: cfg.pass,
+            maxBodyLength: Infinity,
+            maxContentLength: Infinity,
+            httpsAgent: agent,
+        });
+    } catch (err) {
+        log.error(`cannot conntect to WebDAV: ${err}`);
+        return;
+    }
+
+    return new Promise<void>((resolve, reject) => {
         try {
             log.debug(`WebDAV: Download of "${fileName}" started`);
 
-            // Fires at most once, whichever of the two stream events comes first.
-            let done: BackItUpGetFileCallback | undefined = callback;
-            const finish = (err?: Error | string | null): void => {
-                if (done) {
-                    const fire = done;
-                    done = undefined;
-                    fire(err);
-                }
-            };
+            // The promise takes over the single-fire guard the old `finish` helper provided.
+            const finish = (err?: Error | string | null): void => (err ? reject(err) : resolve());
 
             const writeStream = createWriteStream(toStoreName);
             writeStream
@@ -229,14 +244,10 @@ export async function getFile(
                     log.debug(`WebDAV: Download of "${fileName}" finish`);
                     finish();
                 });
-            client!.createReadStream(fileName).pipe(writeStream);
+            client.createReadStream(fileName).pipe(writeStream);
         } catch (e) {
             log.debug(String(e));
-            if (callback) {
-                setImmediate(() => callback(e as Error));
-            }
+            reject(e as Error);
         }
-    } else if (callback) {
-        setImmediate(() => callback('Not configured'));
-    }
+    });
 }

@@ -2,16 +2,12 @@ import { join } from 'node:path';
 import { lstatSync, readdirSync, statSync, unlinkSync } from 'node:fs';
 import { removeSync } from 'fs-extra';
 
-import type { BackItUpExecuteContext } from '../types';
-import type { BackItUpScriptCallback } from './types';
+import type { BackItUpContext, BackItUpProps } from '../types';
 
 interface CleanOptions {
-    context: BackItUpExecuteContext;
-    backupDir: string;
     /** keep this many files per backup type; 0 means "manual run, delete nothing" */
     deleteBackupAfter: number;
     name?: string;
-    ignoreErrors?: boolean;
     influxDBMulti?: boolean;
     influxDBEvents?: unknown[];
     mySqlMulti?: boolean;
@@ -22,16 +18,16 @@ interface CleanOptions {
     ccuEvents?: unknown[];
 }
 
-type Errors = BackItUpExecuteContext['errors'];
-
-function cleanFiles(
-    dir: string,
-    options: CleanOptions,
-    names: string[],
-    num: number,
-    log: ioBroker.Logger,
-    errors: Errors,
-): void {
+/**
+ * Drops everything but the newest `num` backups per backup type.
+ *
+ * @param dir directory to clean
+ * @param options script options, for the multi-instance counts
+ * @param names backup types of this run
+ * @param num how many to keep per type
+ * @param ctx run context, for the logger and the error store
+ */
+function cleanFiles(dir: string, options: CleanOptions, names: string[], num: number, ctx: BackItUpContext): void {
     if (!num) {
         return;
     }
@@ -80,18 +76,24 @@ function cleanFiles(
                         files.push(join(dir, result[i]));
                     }
                 }
-                deleteFiles(files, log, errors);
+                deleteFiles(files, ctx);
             }
         });
     } catch (e) {
-        errors.cifs = errors.cifs || (e as Error);
+        ctx.errors.cifs = ctx.errors.cifs || (e as Error);
     }
 }
 
-function deleteFiles(files: string[], log: ioBroker.Logger, errors: Errors): boolean | undefined {
+/**
+ * Deletes the given entries, stopping at the first one that fails.
+ *
+ * @param files absolute paths to delete
+ * @param ctx run context, for the logger and the error store
+ */
+function deleteFiles(files: string[], ctx: BackItUpContext): boolean | undefined {
     try {
         for (let f = 0; f < files.length; f++) {
-            log.debug(`delete ${files[f]}`);
+            ctx.log.debug(`delete ${files[f]}`);
 
             const stat = lstatSync(files[f]);
             if (stat.isDirectory()) {
@@ -102,47 +104,45 @@ function deleteFiles(files: string[], log: ioBroker.Logger, errors: Errors): boo
         }
         return true;
     } catch (e) {
-        errors.clean = errors.clean || (e as Error);
-        log.error(e);
+        ctx.errors.clean = ctx.errors.clean || (e as Error);
+        ctx.log.error(e);
         return undefined;
     }
 }
 
-export function command(options: CleanOptions, log: ioBroker.Logger, callback?: BackItUpScriptCallback): void {
-    if (options.backupDir && options.context && options.context.fileNames && options.context.fileNames.length) {
+/**
+ * Removes the oldest local backups once everything else of this run has succeeded.
+ *
+ * @param props the run context and the clean slice of the config
+ */
+export async function run(props: BackItUpProps<CleanOptions>): Promise<void> {
+    const { context: ctx, options } = props;
+
+    if (ctx.backupDir && ctx.fileNames && ctx.fileNames.length) {
         // delete files only if no errors
-        const errors = Object.keys(options.context.errors);
+        const errors = Object.keys(ctx.errors);
 
         if (!errors.length) {
             // may be make it configurable
-            let dir = options.backupDir.replace(/\\/g, '/');
+            let dir = ctx.backupDir.replace(/\\/g, '/');
 
             if (dir[0] !== '/' && !dir.match(/\w:/)) {
                 dir = `/${dir || ''}`;
             }
 
             if (options && options.deleteBackupAfter === 0) {
-                log.warn('No older backup files are deleted, because this backup was started manually');
+                ctx.log.warn('No older backup files are deleted, because this backup was started manually');
             }
 
             // `cleanFiles` is synchronous and takes six parameters. A seventh argument - a
             // completion callback - used to be passed here and was silently dropped, so the error
             // handling it contained never ran. Removed rather than wired up: making it fire would
             // change when and with what this step reports back.
-            cleanFiles(
-                dir,
-                options,
-                options.context.types,
-                options.deleteBackupAfter,
-                log,
-                options.context.errors,
-            );
+            cleanFiles(dir, options, ctx.types, options.deleteBackupAfter, ctx);
         } else {
-            log.error(`Backup files not deleted from ${options.backupDir} because some errors.`);
+            ctx.log.error(`Backup files not deleted from ${ctx.backupDir} because some errors.`);
         }
     }
-
-    callback?.();
 }
 
 export const ignoreErrors = true;

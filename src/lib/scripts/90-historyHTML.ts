@@ -1,16 +1,13 @@
 import { _, getTimeString } from '../tools';
 import { buildHistoryErrorLine } from '../notificationText';
-import type { BackItUpExecuteContext } from '../types';
-import type { BackItUpScriptCallback } from './types';
+import type { BackItUpProps } from '../types';
 
 interface HistoryTarget {
     enabled?: boolean;
 }
 
 interface HistoryHtmlOptions {
-    context: BackItUpExecuteContext;
     name: string;
-    adapter: ioBroker.Adapter;
     ftp?: HistoryTarget;
     cifs?: HistoryTarget;
     dropbox?: HistoryTarget;
@@ -24,19 +21,20 @@ interface HistoryHtmlOptions {
     };
 }
 
-export async function command(
-    options: HistoryHtmlOptions,
-    log: ioBroker.Logger,
-    callback?: BackItUpScriptCallback,
-): Promise<void> {
-    if (options.historyHTML.enabled && options.adapter) {
+/**
+ * Adds this run to the HTML history state.
+ *
+ * @param props the run context and the historyHTML slice of the config
+ */
+export async function run(props: BackItUpProps<HistoryHtmlOptions>): Promise<void> {
+    const { context: ctx, options } = props;
+
+    if (options.historyHTML.enabled && ctx.adapter) {
         let historyArray: string[] = [];
-        // Cleared after the success call so a throw from it cannot report a second time.
-        let cb = callback;
         try {
             // function for entering the backup execution in the history-log
             let historyList: string | undefined;
-            const state = await options.adapter.getStateAsync('history.html');
+            const state = await ctx.adapter.getStateAsync('history.html');
 
             if (state && state.val) {
                 historyList = state.val as string;
@@ -48,18 +46,18 @@ export async function command(
                 }
             }
 
-            // analyse here the info from options.context.errors and options.context.done
+            // analyse here the info from context.errors and context.done
             if (historyList !== undefined) {
                 try {
                     historyArray = historyList.split('&nbsp;');
                 } catch (err) {
-                    log.error(`history error: ${err} Please reinstall BackItUp and run "iobroker fix"!!`);
+                    ctx.log.error(`history error: ${err} Please reinstall BackItUp and run "iobroker fix"!!`);
                 }
             }
             const timeStamp = getTimeString(options.historyHTML.systemLang);
             let doneSomething = false;
 
-            const errors = Object.keys(options.context.errors);
+            const errors = Object.keys(ctx.errors);
 
             const entry = (text: string): string =>
                 `<span class="backup-type-${options.name}">${timeStamp} - ${_('Type', options.historyHTML.systemLang)}: ${options.name} - ${text}</span>`;
@@ -86,7 +84,7 @@ export async function command(
                 }
             } else {
                 historyArray.unshift(
-                    entry(buildHistoryErrorLine(options.context.errors, options.historyHTML.systemLang)),
+                    entry(buildHistoryErrorLine(ctx.errors, options.historyHTML.systemLang)),
                 );
             }
 
@@ -96,16 +94,14 @@ export async function command(
                     historyArray.length - options.historyHTML.entriesNumber,
                 );
             }
-            log.debug('new history html values created');
-            await options.adapter.setStateAsync('history.html', { val: historyArray.join('&nbsp;'), ack: true });
+            ctx.log.debug('new history html values created');
+            await ctx.adapter.setStateAsync('history.html', { val: historyArray.join('&nbsp;'), ack: true });
 
-            cb?.(null, 'done');
-            cb = undefined;
         } catch (err) {
-            cb?.(`history html could not be created: ${err}`);
+            // A plain string, as before: wrapping it in an Error would prefix the reported text.
+            // eslint-disable-next-line @typescript-eslint/only-throw-error
+            throw `history html could not be created: ${err}`;
         }
-    } else {
-        callback?.();
     }
 }
 

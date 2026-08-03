@@ -2,13 +2,10 @@ import { existsSync, readdirSync, statSync, unlinkSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { copyFile } from '../tools';
-import type { BackItUpExecuteContext } from '../types';
-import type { BackItUpScriptCallback } from './types';
+import type { BackItUpContext, BackItUpProps } from '../types';
 
 interface CifsCopyOptions {
-    context: BackItUpExecuteContext;
     dir: string;
-    backupDir: string;
     mountType?: 'CIFS' | 'NFS' | 'Copy' | 'Expert';
     deleteOldBackup?: boolean;
     deleteBackupAfter?: number;
@@ -22,54 +19,73 @@ interface CifsCopyOptions {
     ccuEvents?: unknown[];
 }
 
-type Errors = BackItUpExecuteContext['errors'];
-type Done = (error?: Error | string | null) => void;
-
-function copyFiles(dir: string, fileNames: string[], log: ioBroker.Logger, errors: Errors, callback?: Done): void {
-    if (!fileNames || !fileNames.length) {
-        callback?.();
-    } else {
+/**
+ * Copies every file of this run into the mounted directory, one after the other.
+ *
+ * A failed copy is recorded and logged but does not stop the remaining files, as before.
+ *
+ * @param dir target directory
+ * @param fileNames the files to copy; this list is consumed
+ * @param ctx run context, for the logger and the error store
+ */
+async function copyFiles(dir: string, fileNames: string[], ctx: BackItUpContext): Promise<void> {
+    while (fileNames.length) {
         let fileName = fileNames.shift() as string;
         fileName = fileName.replace(/\\/g, '/');
         const onlyFileName = fileName.split('/').pop() as string;
         try {
-            log.debug(`Copy ${onlyFileName}...`);
-            copyFile(fileName, join(dir, onlyFileName), err => {
-                if (err) {
-                    errors.cifs = err;
-                    log.error(err as unknown as string);
-                }
-                setImmediate(copyFiles, dir, fileNames, log, errors, callback);
+            ctx.log.debug(`Copy ${onlyFileName}...`);
+            await new Promise<void>(resolve => {
+                copyFile(fileName, join(dir, onlyFileName), err => {
+                    if (err) {
+                        ctx.errors.cifs = err;
+                        ctx.log.error(err);
+                    }
+                    resolve();
+                });
             });
         } catch (e) {
-            log.error(e);
-            errors.cifs = e as Error;
-            setImmediate(copyFiles, dir, fileNames, log, errors, callback);
+            ctx.log.error(e);
+            ctx.errors.cifs = e as Error;
         }
     }
 }
 
-function deleteFiles(files: string[], log: ioBroker.Logger, errors: Errors): boolean | undefined {
+/**
+ * Deletes the given files, stopping at the first one that fails.
+ *
+ * @param files absolute paths to delete
+ * @param ctx run context, for the logger and the error store
+ */
+function deleteFiles(files: string[], ctx: BackItUpContext): boolean | undefined {
     try {
         for (let f = 0; f < files.length; f++) {
-            log.debug(`delete ${files[f]}`);
+            ctx.log.debug(`delete ${files[f]}`);
             unlinkSync(files[f]);
         }
         return true;
     } catch (e) {
-        errors.cifs = errors.cifs || (e as Error);
-        log.error(e);
+        ctx.errors.cifs = ctx.errors.cifs || (e as Error);
+        ctx.log.error(e);
         return undefined;
     }
 }
 
+/**
+ * Drops everything but the newest `num` backups per backup type.
+ *
+ * @param dir directory to clean
+ * @param options script options, for the multi-instance counts
+ * @param names backup types of this run
+ * @param num how many to keep per type
+ * @param ctx run context, for the logger and the error store
+ */
 function cleanFiles(
     dir: string,
     options: CifsCopyOptions,
     names: string[],
     num: number,
-    log: ioBroker.Logger,
-    errors: Errors,
+    ctx: BackItUpContext,
 ): void {
     if (!num) {
         return;
@@ -121,64 +137,57 @@ function cleanFiles(
                     }
                 }
             });
-            deleteFiles(files, log, errors);
+            deleteFiles(files, ctx);
         }
     } catch (e) {
-        errors.cifs = errors.cifs || (e as Error);
+        ctx.errors.cifs = ctx.errors.cifs || (e as Error);
     }
 }
 
-export function command(options: CifsCopyOptions, log: ioBroker.Logger, callback?: BackItUpScriptCallback): void {
-    if (options.dir && options.context && options.context.fileNames && options.context.fileNames.length) {
-        const fileNames: string[] = JSON.parse(JSON.stringify(options.context.fileNames));
+/**
+ * Copies this run's archives into the mounted NAS directory and prunes the old ones.
+ *
+ * @param props the run context and the cifs slice of the config
+ */
+export async function run(props: BackItUpProps<CifsCopyOptions>): Promise<void> {
+    const { context: ctx, options } = props;
 
-        let dir = options.dir.replace(/\\/g, '/');
+    if (!options.dir || !ctx.fileNames || !ctx.fileNames.length) {
+        return;
+    }
 
-        if (dir[0] !== '/' && !dir.match(/\w:/)) {
-            dir = `/${dir || ''}`;
+    const fileNames: string[] = JSON.parse(JSON.stringify(ctx.fileNames));
+
+    let dir = options.dir.replace(/\\/g, '/');
+
+    if (dir[0] !== '/' && !dir.match(/\w:/)) {
+        dir = `/${dir || ''}`;
+    }
+    ctx.log.debug(`used copy path: ${dir}`);
+
+    if (!existsSync(dir)) {
+        if (options.mountType === 'Copy') {
+            // A plain string, as before: wrapping it in an Error would prefix the reported text.
+            // eslint-disable-next-line @typescript-eslint/only-throw-error
+            throw `Path "${dir}" not found`;
         }
-        log.debug(`used copy path: ${dir}`);
+        return;
+    }
 
-        let cb = callback;
+    if (dir === ctx.backupDir) {
+        // eslint-disable-next-line @typescript-eslint/only-throw-error
+        throw `The storage path "${dir}" for copying is not configured correctly`;
+    }
 
-        if (existsSync(dir)) {
-            if (dir === options.backupDir) {
-                cb?.(`The storage path "${dir}" for copying is not configured correctly`);
-            } else {
-                copyFiles(dir, fileNames, log, options.context.errors, err => {
-                    if (err) {
-                        log.error(err as unknown as string);
-                        options.context.errors.cifs = options.context.errors.cifs || err;
-                    }
-                    if (options.deleteOldBackup === true) {
-                        // The original wraps this call in `if (…)` with its own TODO noting that
-                        // cleanFiles returns nothing - so the condition is always false and 'cifs'
-                        // is never recorded as done on this path. The dead branch is dropped here;
-                        // the call and its effect are unchanged.
-                        cleanFiles(
-                            dir,
-                            options,
-                            options.context.types,
-                            options.deleteBackupAfter as number,
-                            log,
-                            options.context.errors,
-                        );
-                    } else if (!options.context.errors.cifs) {
-                        options.context.done.push('cifs');
-                    }
-                    if (cb) {
-                        cb(err);
-                        cb = undefined;
-                    }
-                });
-            }
-        } else if (options.mountType === 'Copy') {
-            cb?.(`Path "${dir}" not found`);
-        } else {
-            cb?.();
-        }
-    } else {
-        callback?.();
+    await copyFiles(dir, fileNames, ctx);
+
+    if (options.deleteOldBackup === true) {
+        // The original wraps this call in `if (…)` with its own TODO noting that cleanFiles returns
+        // nothing - so the condition is always false and 'cifs' is never recorded as done on this
+        // path. The dead branch is dropped here; the call and its effect are unchanged.
+        cleanFiles(dir, options, ctx.types, options.deleteBackupAfter as number, ctx);
+    } else if (!ctx.errors.cifs) {
+        ctx.done.push('cifs');
     }
 }
 

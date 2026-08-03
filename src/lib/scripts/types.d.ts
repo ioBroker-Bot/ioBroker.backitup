@@ -1,36 +1,42 @@
-import type { BackItUpExecuteContext } from '../types';
+import type { BackItUpExecuteContext, BackItUpProps } from '../types';
 
 /**
- * Reported when a backup step finishes. Most steps call it with a single error or with nothing.
- */
-export type BackItUpScriptCallback = (
-    error?: Error | string | null,
-    /**
-     * Command output. Several steps put the caught Error in this slot instead; lib/execute only
-     * feeds it to `log.debug`, so both occur in practice.
-     */
-    stdout?: string | Error | null,
-    /**
-     * Process exit code. Only 10-iobroker fills this; lib/execute carries it to the end of the run
-     * and writes it to the `output.line` state as `[EXIT] <code>`.
-     */
-    code?: number | null,
-) => void;
-
-/**
- * Every step gets the config slice lib/execute picked for it, plus the shared `context`. The slice
- * differs per step, so it stays open here and each script narrows it to what it actually reads.
+ * Every step gets the config slice lib/execute picked for it. The slice differs per step, so it
+ * stays open here and each script narrows it to what it actually reads.
+ *
+ * The run-scoped values (`context`, `backupDir`, `timestamp`, `adapter`) are no longer grafted on
+ * here - they live on the {@link BackItUpContext} that is passed alongside.
  */
 export type BackItUpScriptOptions = {
-    context: BackItUpExecuteContext;
     [setting: string]: unknown;
 };
 
+/**
+ * A failure that also carries a process exit code.
+ *
+ * Only 10-iobroker needs this: it reports the forked CLI's exit code even when the fork itself
+ * failed. Every other step just rejects with a plain Error.
+ */
+export interface BackItUpStepFailure extends Error {
+    exitCode?: number;
+}
+
 /** Contract every module under lib/scripts/ exports */
 export interface BackItUpScript {
-    command(options: never, log: ioBroker.Logger, callback: BackItUpScriptCallback): void | Promise<void>;
+    /**
+     * Runs the step.
+     *
+     * Resolving means "carry on with the next step"; a step that produces a process exit code
+     * resolves with it. Rejecting aborts the run unless the step is configured to ignore errors.
+     * A step must always settle - lib/execute waits for it before advancing.
+     *
+     * @param props the run context plus this step's config slice
+     */
+    run(props: BackItUpProps): Promise<number | void>;
     /** when true a failure of this step does not fail the whole backup */
     ignoreErrors: boolean;
     /** when true the step also runs in the "after backup" pass */
     afterBackup?: boolean;
 }
+
+export type { BackItUpExecuteContext };

@@ -3,13 +3,11 @@ import { Agent } from 'node:https';
 import { join } from 'node:path';
 // webdav ships as ESM only; this module stays CommonJS, so the types have to be pulled in with an
 // explicit resolution mode and the value import below has to remain a dynamic `import()`.
-import type { FileStat, WebDAVClient } from 'webdav' with { 'resolution-mode': 'import' };
+import type { WebDAVClient } from 'webdav' with { 'resolution-mode': 'import' };
 
-import type { BackItUpExecuteContext } from '../types';
-import type { BackItUpScriptCallback } from './types';
+import type { BackItUpContext, BackItUpProps } from '../types';
 
 interface WebDavUploadOptions {
-    context: BackItUpExecuteContext;
     username?: string;
     pass?: string;
     url?: string;
@@ -29,243 +27,214 @@ interface WebDavUploadOptions {
     ccuEvents?: unknown[];
 }
 
-type Errors = BackItUpExecuteContext['errors'];
-type Done = (error?: Error | string | null) => void;
-
-async function copyFiles(
-    client: WebDAVClient,
-    dir: string,
-    fileNames: string[],
-    log: ioBroker.Logger,
-    errors: Errors,
-    callback?: Done,
-): Promise<void> {
-    if (!fileNames || !fileNames.length) {
-        callback?.();
-    } else {
+/**
+ * Uploads every file of this run, one after the other.
+ *
+ * A failed upload is logged but does not stop the remaining files, as before.
+ *
+ * @param client connected webdav client
+ * @param dir target directory
+ * @param fileNames the files to send; this list is consumed
+ * @param ctx run context, for the logger
+ */
+async function copyFiles(client: WebDAVClient, dir: string, fileNames: string[], ctx: BackItUpContext): Promise<void> {
+    while (fileNames.length) {
         let fileName = fileNames.shift() as string;
         fileName = fileName.replace(/\\/g, '/');
         const onlyFileName = fileName.split('/').pop() as string;
 
-        if (existsSync(fileName)) {
-            try {
-                const webdavFilename = join(dir, onlyFileName);
+        if (!existsSync(fileName)) {
+            ctx.log.error(`WebDAV: File "${fileName}" not found`);
+            continue;
+        }
 
-                log.debug(`WebDAV: Copy ${onlyFileName}...`);
-                let fileContent: Buffer | null = readFileSync(fileName);
+        try {
+            const webdavFilename = join(dir, onlyFileName);
 
-                // Upload File
-                await client
-                    .putFileContents(webdavFilename, fileContent, {
-                        format: 'binary',
-                        'Content-Type': 'application/octet-stream',
-                        contentLength: fileContent.length,
-                    } as never)
-                    .then(() => {
-                        fileContent = null;
-                        setImmediate(copyFiles, client, dir, fileNames, log, errors, callback);
-                    });
-            } catch (e) {
-                log.error(`WebDAV: ${e}`);
-                setImmediate(copyFiles, client, dir, fileNames, log, errors, callback);
-            }
-        } else {
-            log.error(`WebDAV: File "${fileName}" not found`);
-            setImmediate(copyFiles, client, dir, fileNames, log, errors, callback);
+            ctx.log.debug(`WebDAV: Copy ${onlyFileName}...`);
+            const fileContent: Buffer = readFileSync(fileName);
+
+            // Upload File
+            await client.putFileContents(webdavFilename, fileContent, {
+                format: 'binary',
+                'Content-Type': 'application/octet-stream',
+                contentLength: fileContent.length,
+            } as never);
+        } catch (e) {
+            ctx.log.error(`WebDAV: ${e}`);
         }
     }
 }
 
-function deleteFiles(
-    client: WebDAVClient,
-    files: string[],
-    log: ioBroker.Logger,
-    errors: Errors,
-    callback?: Done,
-): void {
-    if (!files || !files.length) {
-        callback?.();
-    } else {
-        log.debug(`WebDAV: delete ${files[0]}`);
+/**
+ * Deletes the given files, keeping going past any that fail.
+ *
+ * @param client connected webdav client
+ * @param files paths to delete; this list is consumed
+ * @param ctx run context, for the logger
+ */
+async function deleteFiles(client: WebDAVClient, files: string[], ctx: BackItUpContext): Promise<void> {
+    while (files.length) {
+        ctx.log.debug(`WebDAV: delete ${files[0]}`);
         const file = files.shift() as string;
 
-        client
-            .deleteFile(file)
-            .then(() => {
-                setImmediate(deleteFiles, client, files, log, errors, callback);
-            })
-            .catch(err => {
-                log.error(`WebDAV: ${err}`);
-                setImmediate(deleteFiles, client, files, log, errors, callback);
-            });
+        try {
+            await client.deleteFile(file);
+        } catch (err) {
+            ctx.log.error(`WebDAV: ${err}`);
+        }
     }
 }
 
+/**
+ * Drops everything but the newest `num` backups per backup type.
+ *
+ * @param client connected webdav client
+ * @param options script options, for the multi-instance counts
+ * @param dir directory to clean
+ * @param names backup types of this run
+ * @param num how many to keep per type
+ * @param ctx run context, for the logger
+ */
 async function cleanFiles(
     client: WebDAVClient,
     options: WebDavUploadOptions,
     dir: string,
     names: string[],
     num: number,
-    log: ioBroker.Logger,
-    errors: Errors,
-    callback?: Done,
+    ctx: BackItUpContext,
 ): Promise<void> {
     if (!num) {
-        callback?.();
         return;
     }
-    try {
-        const result = await client.getDirectoryContents(dir.replace(/^\/$/, ''));
 
-        if (result) {
-            const files: string[] = [];
-            names.forEach(name => {
-                const subResult = result.filter(a => a.basename.startsWith(name));
-                let numDel = num;
+    const result = await client.getDirectoryContents(dir.replace(/^\/$/, ''));
 
-                // Multi-instance setups produce one file per configured target per run.
-                if (name === 'influxDB' && options.influxDBMulti) {
-                    numDel = num * (options.influxDBEvents as unknown[]).length;
-                }
-                if (name === 'mysql' && options.mySqlMulti) {
-                    numDel = num * (options.mySqlEvents as unknown[]).length;
-                }
-                if (name === 'pgsql' && options.pgSqlMulti) {
-                    numDel = num * (options.pgSqlEvents as unknown[]).length;
-                }
-                if (name === 'homematic' && options.ccuMulti) {
-                    numDel = num * (options.ccuEvents as unknown[]).length;
-                }
-
-                if (subResult.length > numDel) {
-                    // delete oldest files
-                    subResult.sort((a, b) => {
-                        const at = new Date(a.lastmod).getTime();
-                        const bt = new Date(b.lastmod).getTime();
-                        if (at > bt) {
-                            return -1;
-                        }
-                        if (at < bt) {
-                            return 1;
-                        }
-                        return 0;
-                    });
-
-                    for (let i = numDel; i < subResult.length; i++) {
-                        files.push(subResult[i].filename);
-                    }
-                }
-            });
-            deleteFiles(client, files, log, errors, callback);
-        } else {
-            callback?.();
-        }
-    } catch (e) {
-        callback?.(e as Error);
+    if (!result) {
+        return;
     }
+
+    const files: string[] = [];
+    names.forEach(name => {
+        const subResult = result.filter(a => a.basename.startsWith(name));
+        let numDel = num;
+
+        // Multi-instance setups produce one file per configured target per run.
+        if (name === 'influxDB' && options.influxDBMulti) {
+            numDel = num * (options.influxDBEvents as unknown[]).length;
+        }
+        if (name === 'mysql' && options.mySqlMulti) {
+            numDel = num * (options.mySqlEvents as unknown[]).length;
+        }
+        if (name === 'pgsql' && options.pgSqlMulti) {
+            numDel = num * (options.pgSqlEvents as unknown[]).length;
+        }
+        if (name === 'homematic' && options.ccuMulti) {
+            numDel = num * (options.ccuEvents as unknown[]).length;
+        }
+
+        if (subResult.length > numDel) {
+            // delete oldest files
+            subResult.sort((a, b) => {
+                const at = new Date(a.lastmod).getTime();
+                const bt = new Date(b.lastmod).getTime();
+                if (at > bt) {
+                    return -1;
+                }
+                if (at < bt) {
+                    return 1;
+                }
+                return 0;
+            });
+
+            for (let i = numDel; i < subResult.length; i++) {
+                files.push(subResult[i].filename);
+            }
+        }
+    });
+
+    await deleteFiles(client, files, ctx);
 }
 
-export async function command(
-    options: WebDavUploadOptions,
-    log: ioBroker.Logger,
-    callback?: BackItUpScriptCallback,
-): Promise<void> {
-    if (options.username && options.pass && options.url && options.context.fileNames.length) {
-        const fileNames: string[] = JSON.parse(JSON.stringify(options.context.fileNames));
-        log.debug('Start WebDAV Upload ...');
+/**
+ * Sends this run's archives to a WebDAV server and prunes the old ones.
+ *
+ * The callback version reported up to three times on a broken connection: a failed `createClient`
+ * reported success, the dereference of the missing client then threw into the next `try`, which
+ * reported success again, and the third `try` finally reported the error. It reports once now, and
+ * an unusable client ends the step instead of running into the follow-up failures.
+ *
+ * @param props the run context and the webdav slice of the config
+ */
+export async function run(props: BackItUpProps<WebDavUploadOptions>): Promise<void> {
+    const { context: ctx, options } = props;
 
-        let dir = (options.dir || '').replace(/\\/g, '/');
+    if (!options.username || !options.pass || !options.url || !ctx.fileNames.length) {
+        return;
+    }
 
-        if (!dir || dir[0] !== '/') {
-            dir = `/${dir || ''}`;
+    const fileNames: string[] = JSON.parse(JSON.stringify(ctx.fileNames));
+    ctx.log.debug('Start WebDAV Upload ...');
+
+    let dir = (options.dir || '').replace(/\\/g, '/');
+
+    if (!dir || dir[0] !== '/') {
+        dir = `/${dir || ''}`;
+    }
+
+    const { createClient } = await import('webdav');
+    const agent = new Agent({ rejectUnauthorized: Boolean(options.signedCertificates) });
+
+    let client: WebDAVClient;
+
+    try {
+        client = createClient(options.url, {
+            username: options.username,
+            password: options.pass,
+            maxBodyLength: Infinity,
+            httpsAgent: agent,
+        });
+    } catch (err) {
+        ctx.errors.webdav = err as Error;
+        ctx.log.error(`cannot connect to WebDAV: ${err}`);
+        throw err;
+    }
+
+    try {
+        if ((await client.exists(dir)) === false) {
+            await client.createDirectory(dir);
         }
+    } catch (e) {
+        // Recorded and carried on with, as before - the directory may well exist already, and the
+        // error store keeps the step from being counted as done further down.
+        ctx.log.warn(`cannot created the backup directory: ${e}`);
+        ctx.errors.webdav = e as Error;
+    }
 
-        const { createClient } = await import('webdav');
-        const agent = new Agent({ rejectUnauthorized: Boolean(options.signedCertificates) });
+    try {
+        await client.getDirectoryContents(dir);
+    } catch (err) {
+        ctx.log.error(`cannot connect to WebDAV: ${err}`);
+        ctx.errors.webdav = err as Error;
+        throw err;
+    }
 
-        let client: WebDAVClient | undefined;
+    await copyFiles(client, dir, fileNames, ctx);
+
+    if (options.deleteOldBackup === true) {
+        const webdavDeleteAfter =
+            options.advancedDelete === false ? options.deleteBackupAfter : options.webdavDeleteAfter;
 
         try {
-            client = createClient(options.url, {
-                username: options.username,
-                password: options.pass,
-                maxBodyLength: Infinity,
-                httpsAgent: agent,
-            });
-        } catch (err) {
-            options.context.errors.webdav = err as Error;
-            log.error(`cannot connect to WebDAV: ${err}`);
-            // No early return on purpose: the dereference below then throws into the next try, so
-            // the callback reports twice. Preserved.
-            callback?.();
+            await cleanFiles(client, options, dir, ctx.types, webdavDeleteAfter as number, ctx);
+        } catch (cleanErr) {
+            ctx.errors.webdav = ctx.errors.webdav || (cleanErr as Error);
+            throw cleanErr;
         }
-        try {
-            if ((await client!.exists(dir)) === false) {
-                await client!.createDirectory(dir);
-            }
-        } catch (e) {
-            log.warn(`cannot created the backup directory: ${e}`);
-            options.context.errors.webdav = e as Error;
-            callback?.();
-        }
+    }
 
-        try {
-            client!
-                .getDirectoryContents(dir)
-                .then(() => {
-                    void copyFiles(client!, dir, fileNames, log, options.context.errors, err => {
-                        if (err) {
-                            options.context.errors.webdav = err;
-                            log.error(`WebDAV: ${err}`);
-                        }
-                        if (options.deleteOldBackup === true) {
-                            const webdavDeleteAfter =
-                                options.advancedDelete === false
-                                    ? options.deleteBackupAfter
-                                    : options.webdavDeleteAfter;
-
-                            void cleanFiles(
-                                client!,
-                                options,
-                                dir,
-                                options.context.types,
-                                webdavDeleteAfter as number,
-                                log,
-                                options.context.errors,
-                                cleanErr => {
-                                    if (cleanErr) {
-                                        options.context.errors.webdav =
-                                            options.context.errors.webdav || cleanErr;
-                                        callback?.(cleanErr);
-                                    } else {
-                                        if (!options.context.errors.webdav) {
-                                            options.context.done.push('webdav');
-                                        }
-                                        callback?.();
-                                    }
-                                },
-                            );
-                        } else {
-                            if (!options.context.errors.webdav) {
-                                options.context.done.push('webdav');
-                            }
-                            callback?.();
-                        }
-                    });
-                })
-                .catch(err => {
-                    log.error(`cannot connect to WebDAV: ${err}`);
-                    options.context.errors.webdav = err;
-                    callback?.(err);
-                });
-        } catch (e) {
-            log.error(`Error WebDAV-Upload: ${e}`);
-            options.context.errors.webdav = e as Error;
-            callback?.(e as Error);
-        }
-    } else {
-        callback?.();
+    if (!ctx.errors.webdav) {
+        ctx.done.push('webdav');
     }
 }
 

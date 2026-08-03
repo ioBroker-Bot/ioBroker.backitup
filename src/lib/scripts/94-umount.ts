@@ -1,88 +1,107 @@
 import { exec } from 'node:child_process';
 import { existsSync, unlinkSync } from 'node:fs';
 
-import type { BackItUpExecuteContext } from '../types';
-import type { BackItUpScriptCallback } from './types';
+import { delay } from '../tools';
+import type { BackItUpContext, BackItUpProps } from '../types';
 
 interface UmountOptions {
-    context: BackItUpExecuteContext;
     mount: string;
     mountType: 'CIFS' | 'NFS' | 'Copy' | 'Expert';
-    backupDir: string;
     fileDir: string;
     sudo?: boolean;
 }
+
+/** How long to wait before the umount attempt */
+const SETTLE_MS = 5000;
+/** How long to wait after "device is busy" before the lazy umount */
+const BUSY_RETRY_MS = 120000;
 
 /**
  * Drops the marker file that records an active mount
  *
  * @param options resolved storage settings
- * @param log adapter logger
+ * @param ctx run context, for the logger
  */
-function dropMountMarker(options: UmountOptions, log: ioBroker.Logger): void {
+function dropMountMarker(options: UmountOptions, ctx: BackItUpContext): void {
     try {
         if (existsSync(`${options.fileDir}/.mount`)) {
             unlinkSync(`${options.fileDir}/.mount`);
         }
     } catch (e) {
-        log.warn(`file ".mount" cannot deleted: ${e}`);
+        ctx.log.warn(`file ".mount" cannot deleted: ${e}`);
     }
 }
 
-export function command(options: UmountOptions, log: ioBroker.Logger, callback?: BackItUpScriptCallback): void {
+/**
+ * Runs a command and hands back everything `exec` reported.
+ *
+ * It never rejects: the first call below is expected to fail whenever `grep` finds nothing, and
+ * that case is decided on the output rather than on the exit code - as it was before.
+ *
+ * @param cmd the command line to run
+ */
+async function execAsync(cmd: string): Promise<{ error: Error | null; stdout: string; stderr: string }> {
+    return new Promise(resolve => {
+        exec(cmd, (error, stdout, stderr) => resolve({ error, stdout, stderr }));
+    });
+}
+
+/**
+ * Unmounts the backup directory again.
+ *
+ * The callback version never reported when the `.mount` marker file was missing - the backup run
+ * then waited for a step that had already returned. That case now logs and ends the step.
+ *
+ * @param props the run context and the storage slice of the config
+ */
+export async function run(props: BackItUpProps<UmountOptions>): Promise<void> {
+    const { context: ctx, options } = props;
+
     if (!options.mount) {
-        callback?.('NO mount path specified!');
+        // A plain string, as before: wrapping it in an Error would prefix the reported text.
+        // eslint-disable-next-line @typescript-eslint/only-throw-error
+        throw 'NO mount path specified!';
+    }
+
+    if (options.mountType !== 'CIFS' && options.mountType !== 'NFS' && options.mountType !== 'Expert') {
         return;
     }
-    if (options.mountType === 'CIFS' || options.mountType === 'NFS' || options.mountType === 'Expert') {
-        // Note: when the marker file is absent nothing runs and the callback is never invoked.
-        if (existsSync(`${options.fileDir}/.mount`)) {
-            exec(`mount | grep -o "${options.backupDir}"`, (_error, stdout) => {
-                if (stdout.includes(options.backupDir)) {
-                    log.debug('mount active, umount is started ...');
-                    setTimeout(() => {
-                        exec(
-                            `${options.sudo ? 'sudo umount' : 'umount'} ${options.backupDir}`,
-                            (error, umountStdout) => {
-                                if (error) {
-                                    log.debug('device is busy... wait 2 Minutes!!');
-                                    setTimeout(() => {
-                                        exec(
-                                            `${options.sudo ? 'sudo umount' : 'umount'} -l ${options.backupDir}`,
-                                            (lazyError, lazyStdout, lazyStderr) => {
-                                                if (lazyError) {
-                                                    options.context.errors.umount = lazyError;
-                                                    log.error(lazyStderr);
-                                                    callback?.(lazyError);
-                                                } else {
-                                                    options.context.done.push('umount');
-                                                    log.debug('umount successfully completed');
-                                                    dropMountMarker(options, log);
-                                                    callback?.(null, lazyStdout);
-                                                }
-                                            },
-                                        );
-                                    }, 120000);
-                                } else {
-                                    options.context.done.push('umount');
-                                    log.debug('umount successfully completed');
-                                    dropMountMarker(options, log);
-                                    callback?.(null, umountStdout);
-                                }
-                            },
-                        );
-                    }, 5000);
-                } else {
-                    options.context.done.push('umount');
-                    log.debug('mount inactive, umount not started ...');
-                    dropMountMarker(options, log);
-                    callback?.(null);
-                }
-            });
-        }
-    } else {
-        callback?.(null);
+
+    if (!existsSync(`${options.fileDir}/.mount`)) {
+        ctx.log.debug('no mount marker found, umount not started ...');
+        return;
     }
+
+    const mounted = await execAsync(`mount | grep -o "${ctx.backupDir}"`);
+
+    if (!mounted.stdout.includes(ctx.backupDir)) {
+        ctx.done.push('umount');
+        ctx.log.debug('mount inactive, umount not started ...');
+        dropMountMarker(options, ctx);
+        return;
+    }
+
+    ctx.log.debug('mount active, umount is started ...');
+    await delay(SETTLE_MS);
+
+    const umounted = await execAsync(`${options.sudo ? 'sudo umount' : 'umount'} ${ctx.backupDir}`);
+
+    if (umounted.error) {
+        ctx.log.debug('device is busy... wait 2 Minutes!!');
+        await delay(BUSY_RETRY_MS);
+
+        const lazy = await execAsync(`${options.sudo ? 'sudo umount' : 'umount'} -l ${ctx.backupDir}`);
+
+        if (lazy.error) {
+            ctx.errors.umount = lazy.error;
+            ctx.log.error(lazy.stderr);
+            throw lazy.error;
+        }
+    }
+
+    ctx.done.push('umount');
+    ctx.log.debug('umount successfully completed');
+    dropMountMarker(options, ctx);
 }
 
 export const ignoreErrors = true;

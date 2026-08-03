@@ -1,11 +1,10 @@
 import { exec } from 'node:child_process';
-import { existsSync, statSync, unlink } from 'node:fs';
+import { existsSync, statSync, unlinkSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { getDate } from '../tools';
-import { compress } from '../targz';
-import type { BackItUpExecuteContext } from '../types';
-import type { BackItUpScriptCallback } from './types';
+import { compressAsync } from '../targz';
+import type { BackItUpProps, BackItUpContext } from '../types';
 
 interface PgSqlEvent {
     host: string;
@@ -18,8 +17,6 @@ interface PgSqlEvent {
 }
 
 interface PgSqlOptions {
-    context: BackItUpExecuteContext;
-    backupDir: string;
     host: string;
     port: number | string;
     user: string;
@@ -34,11 +31,29 @@ interface PgSqlOptions {
     nameSuffix?: string;
 }
 
-export async function command(
-    options: PgSqlOptions,
-    log: ioBroker.Logger,
-    callback?: BackItUpScriptCallback,
-): Promise<void> {
+/**
+ * Dumps the configured PostgreSQL database(s) and packs each dump.
+ *
+ * As in 30-mysql the callback version reported a dump failure from `startBackup` and then reported
+ * success again from here, and lib/execute scheduled the remaining backup steps twice as a result.
+ * Awaiting collapses that to a single report.
+ *
+ * @param props the run context and the pgsql slice of the config
+ */
+export async function run(props: BackItUpProps<PgSqlOptions>): Promise<void> {
+    const { context: ctx, options } = props;
+
+    // A failed target no longer stops the others, as before; the first failure is reported once
+    // every target has been attempted.
+    let firstError: Error | undefined;
+    const attempt = async (): Promise<void> => {
+        try {
+            await startBackup(ctx, options);
+        } catch (err) {
+            firstError ??= err as Error;
+        }
+    };
+
     if (options.pgSqlMulti) {
         // The per-event settings are written onto `options` itself, one target after another.
         for (let i = 0; i < options.pgSqlEvents.length; i++) {
@@ -50,138 +65,124 @@ export async function command(
             options.dbName = options.pgSqlEvents[i].dbName ? options.pgSqlEvents[i].dbName : '';
             options.nameSuffix = options.pgSqlEvents[i].nameSuffix ? options.pgSqlEvents[i].nameSuffix : '';
 
-            log.debug(`PgSql-Backup for ${options.nameSuffix} is started ...`);
-            await startBackup(options, log, callback);
-            log.debug(`PgSql-Backup for ${options.nameSuffix} is finish`);
+            ctx.log.debug(`PgSql-Backup for ${options.nameSuffix} is started ...`);
+            await attempt();
+            ctx.log.debug(`PgSql-Backup for ${options.nameSuffix} is finish`);
         }
         // Reported as done even when a target failed - kept as found.
-        options.context.done.push('pgsql');
-        options.context.types.push('pgsql');
-        callback?.(null);
-        return;
-    } else if (!options.pgSqlMulti) {
-        log.debug('PgSql-Backup started ...');
-        await startBackup(options, log, callback);
-        log.debug('PgSql-Backup for is finish');
-        options.context.done.push('pgsql');
-        options.context.types.push('pgsql');
-        callback?.(null);
-        return;
+        ctx.done.push('pgsql');
+        ctx.types.push('pgsql');
+    } else {
+        ctx.log.debug('PgSql-Backup started ...');
+        await attempt();
+        ctx.log.debug('PgSql-Backup for is finish');
+        ctx.done.push('pgsql');
+        ctx.types.push('pgsql');
+    }
+
+    if (firstError) {
+        throw firstError;
     }
 }
 
 /**
  * Dumps one database and packs the dump.
  *
- * As in 30-mysql the callback parameter is deliberately local: clearing it here never reached
- * `command`, so a failure is reported once from here and then again as a success from `command`.
- *
+ * @param ctx run context
  * @param options script options, already pointed at the target to dump
- * @param log adapter logger
- * @param callback reports a dump or packing failure
  */
-async function startBackup(
-    options: PgSqlOptions,
-    log: ioBroker.Logger,
-    callback?: BackItUpScriptCallback,
-): Promise<void> {
-    return new Promise(resolve => {
-        let localCallback = callback;
+async function startBackup(ctx: BackItUpContext, options: PgSqlOptions): Promise<void> {
+    let nameSuffix;
+    if (options.hostType === 'Slave' && !options.pgSqlMulti) {
+        nameSuffix = options.slaveSuffix ? options.slaveSuffix : '';
+    } else {
+        nameSuffix = options.nameSuffix ? options.nameSuffix : '';
+    }
+    const fileName = join(
+        ctx.backupDir,
+        `pgsql_${getDate()}${nameSuffix ? `_${nameSuffix}` : ''}_backupiobroker.tar.gz`,
+    );
+    const fileNamePgsql = join(ctx.backupDir, `pgsql_${getDate()}_backupiobroker.sql`);
 
-        let nameSuffix;
-        if (options.hostType === 'Slave' && !options.pgSqlMulti) {
-            nameSuffix = options.slaveSuffix ? options.slaveSuffix : '';
-        } else {
-            nameSuffix = options.nameSuffix ? options.nameSuffix : '';
-        }
-        const fileName = join(
-            options.backupDir,
-            `pgsql_${getDate()}${nameSuffix ? `_${nameSuffix}` : ''}_backupiobroker.tar.gz`,
-        );
-        const fileNamePgsql = join(options.backupDir, `pgsql_${getDate()}_backupiobroker.sql`);
+    ctx.fileNames.push(fileName);
 
-        options.context.fileNames = options.context.fileNames || [];
-        options.context.fileNames.push(fileName);
+    // Note the asymmetry in the second clause - as in 01-mount, `endsWith("'")` is not negated.
+    if (
+        (!options.pass.startsWith(`"`) || !options.pass.endsWith(`"`)) &&
+        (!options.pass.startsWith(`'`) || options.pass.endsWith(`'`))
+    ) {
+        options.pass = `"${options.pass}"`;
+    }
 
-        // Note the asymmetry in the second clause - as in 01-mount, `endsWith("'")` is not negated.
-        if (
-            (!options.pass.startsWith(`"`) || !options.pass.endsWith(`"`)) &&
-            (!options.pass.startsWith(`'`) || options.pass.endsWith(`'`))
-        ) {
-            options.pass = `"${options.pass}"`;
-        }
-
+    await new Promise<void>((resolve, reject) => {
         exec(
             `${options.exe ? options.exe : 'pg_dump'}  --dbname=postgresql://${options.user}:${options.pass}@${options.host}:${options.port}/${options.dbName} > ${fileNamePgsql}`,
             { maxBuffer: 10 * 1024 * 1024 },
-            (error, _stdout, stderr) => {
+            error => {
                 if (error) {
-                    // `ExecException` is declared as Omit<ErrnoException, 'code'>, which drops the
-                    // nominal Error identity; binding it back keeps the formatted text the same.
-                    const failure: Error = error;
-                    let errLog = `${failure}`;
+                    // Masked on the message itself, not just where it is stored: this error is
+                    // what the step reports, and lib/execute writes it to the adapter log, the
+                    // output.line state and the backup history file. Masking `${error}` and
+                    // masking `error.message` give the same text, the prefix holds no password.
+                    let errLog = error.message;
                     try {
                         const formatPass = options.pass.replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\$&');
                         errLog = errLog.replace(new RegExp(formatPass, 'g'), '****');
                     } catch {
                         // ignore
                     }
-                    options.context.errors.pgsql = errLog.toString();
-                    localCallback?.(errLog, stderr);
-                    localCallback = undefined;
-                    resolve();
+                    error.message = errLog;
+                    // `ExecException` is declared as Omit<ErrnoException, 'code'>, which drops the
+                    // nominal Error identity; binding it back keeps the formatted text the same.
+                    const failure: Error = error;
+                    ctx.errors.pgsql = failure.toString();
+                    // The `stderr` the original passed as a second callback argument is dropped -
+                    // the masked error says the same and cannot leak the password.
+                    reject(failure);
                 } else {
-                    const timer = setInterval(() => {
-                        if (existsSync(fileName)) {
-                            const stats = statSync(fileName);
-                            const fileSize = Math.floor(stats.size / (1024 * 1024));
-                            log.debug(`Packed ${fileSize}MB so far...`);
-                        }
-                    }, 10000);
-
-                    compress(
-                        {
-                            src: fileNamePgsql,
-                            dest: fileName,
-                            tar: {
-                                map: header => {
-                                    header.name = fileNamePgsql.split('/').pop() as string;
-                                    return header;
-                                },
-                            },
-                        },
-                        // lib/targz only ever passes an error; the stdout/stderr parameters the
-                        // original declared here were always undefined.
-                        err => {
-                            clearInterval(timer);
-
-                            if (err) {
-                                options.context.errors.pgsql = err.toString();
-                                if (localCallback) {
-                                    localCallback(err);
-                                    localCallback = undefined;
-                                }
-                                resolve();
-                            } else {
-                                if (fileNamePgsql) {
-                                    // Unlike 30-mysql this uses the async form and rethrows inside
-                                    // the callback, which surfaces as an uncaught exception rather
-                                    // than a warning. Kept as found.
-                                    unlink(fileNamePgsql, unlinkErr => {
-                                        if (unlinkErr) {
-                                            throw unlinkErr;
-                                        }
-                                        log.debug('postgresql File deleted!');
-                                    });
-                                }
-                                resolve();
-                            }
-                        },
-                    );
+                    resolve();
                 }
             },
         );
     });
+
+    const timer = setInterval(() => {
+        if (existsSync(fileName)) {
+            const stats = statSync(fileName);
+            const fileSize = Math.floor(stats.size / (1024 * 1024));
+            ctx.log.debug(`Packed ${fileSize}MB so far...`);
+        }
+    }, 10000);
+
+    try {
+        await compressAsync({
+            src: fileNamePgsql,
+            dest: fileName,
+            tar: {
+                map: header => {
+                    header.name = fileNamePgsql.split('/').pop() as string;
+                    return header;
+                },
+            },
+        });
+    } catch (err) {
+        ctx.errors.pgsql = (err as Error).toString();
+        throw err;
+    } finally {
+        clearInterval(timer);
+    }
+
+    if (fileNamePgsql) {
+        // The original deleted asynchronously and rethrew inside the fs callback, where nothing
+        // could catch it: an undeletable temp file took the whole adapter down, after the archive
+        // had already been written. Now it warns, exactly as 30-mysql does.
+        try {
+            unlinkSync(fileNamePgsql);
+            ctx.log.debug('postgresql File deleted!');
+        } catch (e) {
+            ctx.log.warn(`postgresql File cannot deleted: ${e}`);
+        }
+    }
 }
 
 export const ignoreErrors = true;

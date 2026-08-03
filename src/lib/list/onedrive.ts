@@ -1,6 +1,6 @@
 import Onedrive from '../oneDriveLib';
-import type { BackItUpConfigStorageOneDrive, BackItUpStorage } from '../types';
-import type { BackItUpGetFileCallback, BackItUpListCallback } from './types';
+import type { BackItUpConfigStorageOneDrive } from '../types';
+import type { BackItUpGetFileProps, BackItUpListProps, BackItUpStorageEngineResult } from './types';
 
 /**
  * The engines are handed either the storage node itself or the enclosing creator node, which
@@ -10,13 +10,21 @@ type OneDriveOptions = Partial<BackItUpConfigStorageOneDrive> & {
     onedrive?: Partial<BackItUpConfigStorageOneDrive>;
 };
 
+/**
+ * Lists the backups stored on OneDrive.
+ *
+ * @param props run context, storage config, requested source and backup types
+ */
 export async function list(
-    restoreSource: BackItUpStorage | '' | undefined,
-    options: OneDriveOptions,
-    types: string[],
-    log: ioBroker.Logger,
-    callback?: BackItUpListCallback,
-): Promise<void> {
+    props: BackItUpListProps<OneDriveOptions>,
+): Promise<BackItUpStorageEngineResult | undefined> {
+    const {
+        context: { log },
+        options,
+        restoreSource,
+        types,
+    } = props;
+
     const accessJson =
         options.onedriveAccessJson !== undefined
             ? options.onedriveAccessJson
@@ -45,60 +53,69 @@ export async function list(
     let od_accessToken: string | undefined;
 
     // Refresh token if necessary
-    if (!restoreSource || restoreSource === 'onedrive') {
-        const onedrive = new Onedrive();
-        try {
-            od_accessToken = await onedrive.getToken(accessJson, log);
-        } catch (err) {
-            log.warn(`Onedrive Token: ${err}`);
-        }
+    if (restoreSource && restoreSource !== 'onedrive') {
+        // Another storage was asked for - nothing to file.
+        return undefined;
+    }
 
-        if (od_accessToken) {
-            let dir = (configuredDir || '').replace(/\\/g, '/');
+    const onedrive = new Onedrive();
+    try {
+        od_accessToken = await onedrive.getToken(accessJson, log);
+    } catch (err) {
+        log.warn(`Onedrive Token: ${err}`);
+    }
 
-            // Use minimal path if ownDir is true
-            if (ownDir === true) {
-                dir = (dirMinimal || '').replace(/\\/g, '/');
-            }
+    if (!od_accessToken) {
+        // A plain string, as before: lib/list logs it verbatim.
+        // eslint-disable-next-line @typescript-eslint/only-throw-error
+        throw 'No access token available';
+    }
 
-            // Normalize directory format
-            if (!dir || dir[0] !== '/') {
-                dir = `/${dir || ''}`;
-            }
+    let dir = (configuredDir || '').replace(/\\/g, '/');
 
-            // Unreachable - the step above always leaves at least '/'. Kept as found.
-            if (!dir) {
-                dir = 'root';
-            }
+    // Use minimal path if ownDir is true
+    if (ownDir === true) {
+        dir = (dirMinimal || '').replace(/\\/g, '/');
+    }
 
-            if (dir.startsWith('/')) {
-                dir = dir.substring(1);
-            }
+    // Normalize directory format
+    if (!dir || dir[0] !== '/') {
+        dir = `/${dir || ''}`;
+    }
 
-            try {
-                // Call internal listBackups method from class
-                const files = await onedrive.listBackups({ accessToken: od_accessToken, dir, types, log });
+    // Unreachable - the step above always leaves at least '/'. Kept as found.
+    if (!dir) {
+        dir = 'root';
+    }
 
-                callback?.(null, files, 'onedrive');
-            } catch (error) {
-                log.error(`Onedrive listBackups error: ${error}`);
-                callback?.(error as Error);
-            }
-        } else {
-            callback?.('No access token available');
-        }
-    } else {
-        callback?.();
+    if (dir.startsWith('/')) {
+        dir = dir.substring(1);
+    }
+
+    try {
+        // Call internal listBackups method from class.
+        // A null result used to be handed to the callback and skipped by the caller because it is
+        // falsy; `undefined` is how the props contract says the same thing.
+        return (await onedrive.listBackups({ accessToken: od_accessToken, dir, types, log })) ?? undefined;
+    } catch (error) {
+        log.error(`Onedrive listBackups error: ${error}`);
+        throw error as Error;
     }
 }
 
-export async function getFile(
-    options: OneDriveOptions,
-    fileName: string,
-    toStoreName: string,
-    log: ioBroker.Logger,
-    callback?: BackItUpGetFileCallback,
-): Promise<void> {
+/**
+ * Downloads one backup from OneDrive.
+ *
+ * @param props run context, storage config, the file to fetch and where to put it
+ */
+export async function getFile(props: BackItUpGetFileProps<OneDriveOptions>): Promise<void> {
+    const {
+        context: { log },
+        options,
+        fileName,
+        toStoreName,
+    } = props;
+
     const accessJson = options.onedriveAccessJson ?? options.onedrive?.onedriveAccessJson ?? '';
     const configuredDir = options.dir ?? options.onedrive?.dir ?? '/';
     const ownDir = options.ownDir ?? options.onedrive?.ownDir ?? false;
@@ -110,8 +127,8 @@ export async function getFile(
         .catch(err => log.warn(`OneDrive Token: ${err}`));
 
     if (!od_accessToken) {
-        callback?.('Not configured');
-        return;
+        // eslint-disable-next-line @typescript-eslint/only-throw-error
+        throw 'Not configured';
     }
 
     try {
@@ -125,10 +142,8 @@ export async function getFile(
             targetPath: toStoreName,
             log,
         });
-
-        callback?.();
     } catch (err) {
         log.error(`OneDrive: ${(err as Error).message}`);
-        callback?.(err as Error);
+        throw err as Error;
     }
 }

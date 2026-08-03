@@ -1,3 +1,4 @@
+import type { BackItUpLogger } from './types';
 import axios from 'axios';
 import { createReadStream, createWriteStream, statSync } from 'node:fs';
 import got from '@esm2cjs/got';
@@ -30,8 +31,8 @@ interface OneDriveChildren {
 /** Backups grouped by backup type, as produced by `listBackups` */
 type OneDriveBackups = Record<string, { path: string; name: string; size: number; id: string }[]>;
 
-class onedrive {
-    getAuthorizeUrl(log: ioBroker.Logger): Promise<string> {
+export default class onedrive {
+    getAuthorizeUrl(log: BackItUpLogger): Promise<string> {
         return new Promise<string>(async (resolve, reject) => {
             try {
                 const urlRequest = await axios({
@@ -56,7 +57,7 @@ class onedrive {
         });
     }
 
-    getClientID(log: ioBroker.Logger): Promise<string> {
+    getClientID(log: BackItUpLogger): Promise<string> {
         return new Promise<string>(async (resolve, reject) => {
             try {
                 const urlRequest = await axios({
@@ -80,7 +81,7 @@ class onedrive {
         });
     }
 
-    getRefreshToken(code: string, log: ioBroker.Logger): Promise<string> {
+    getRefreshToken(code: string, log: BackItUpLogger): Promise<string> {
         return new Promise<string>(async (resolve, reject) => {
             try {
                 const data = `redirect_uri=${redirect_uri}&code=${code}&grant_type=authorization_code&client_id=${await this.getClientID(log)}`;
@@ -102,7 +103,7 @@ class onedrive {
         });
     }
 
-    getToken(refreshToken: string, log: ioBroker.Logger): Promise<string> {
+    getToken(refreshToken: string, log: BackItUpLogger): Promise<string> {
         return new Promise<string>(async (resolve, reject) => {
             try {
                 const data = `refresh_token=${refreshToken}&grant_type=refresh_token&client_id=${await this.getClientID(log)}`;
@@ -124,7 +125,7 @@ class onedrive {
         });
     }
 
-    renewToken(refreshToken: string, log: ioBroker.Logger): Promise<string> {
+    renewToken(refreshToken: string, log: BackItUpLogger): Promise<string> {
         return new Promise<string>(async (resolve, reject) => {
             try {
                 const data = `refresh_token=${refreshToken}&grant_type=refresh_token&client_id=${await this.getClientID(log)}`;
@@ -156,7 +157,7 @@ class onedrive {
         accessToken: string;
         parentPath?: string;
         filePath: string;
-        log: ioBroker.Logger;
+        log: BackItUpLogger;
         onProgress?: (uploaded: number) => void;
     }): Promise<OneDriveItem> {
         const fileSize = statSync(filePath).size;
@@ -286,7 +287,7 @@ class onedrive {
         accessToken: string;
         dir: string;
         types: string[];
-        log: ioBroker.Logger;
+        log: BackItUpLogger;
     }): Promise<OneDriveBackups | null> {
         try {
             // Normalize path
@@ -350,7 +351,7 @@ class onedrive {
         dir: string;
         fileName: string;
         targetPath: string;
-        log: ioBroker.Logger;
+        log: BackItUpLogger;
     }): Promise<void> {
         try {
             // Normalize directory path
@@ -430,5 +431,3 @@ class onedrive {
         return children?.value || [];
     }
 }
-
-export = onedrive;

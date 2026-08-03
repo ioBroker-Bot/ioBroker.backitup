@@ -3,18 +3,14 @@ import { stat } from 'node:fs/promises';
 
 import { _, getTimeString } from '../tools';
 import { buildHistoryErrorLine } from '../notificationText';
-import type { BackItUpExecuteContext } from '../types';
-import type { BackItUpScriptCallback } from './types';
+import type { BackItUpLogger, BackItUpProps } from '../types';
 
 interface HistoryTarget {
     enabled?: boolean;
 }
 
 interface HistoryJsonOptions {
-    context: BackItUpExecuteContext;
     name: string;
-    adapter: ioBroker.Adapter;
-    timestamp?: number;
     ftp?: HistoryTarget;
     cifs?: HistoryTarget;
     dropbox?: HistoryTarget;
@@ -42,9 +38,9 @@ interface HistoryJsonEntry {
  * Size of the produced archive, in whole megabytes.
  *
  * @param fileName archive to measure, if it exists
- * @param log adapter logger
+ * @param log logger of the running step
  */
-async function fileSizeCheck(fileName: string | undefined, log: ioBroker.Logger): Promise<string | null> {
+async function fileSizeCheck(fileName: string | undefined, log: BackItUpLogger): Promise<string | null> {
     let fileSize: string | null = null;
 
     if (fileName && existsSync(fileName)) {
@@ -55,114 +51,119 @@ async function fileSizeCheck(fileName: string | undefined, log: ioBroker.Logger)
     return fileSize;
 }
 
-export async function command(
-    options: HistoryJsonOptions,
-    log: ioBroker.Logger,
-    callback?: BackItUpScriptCallback,
-): Promise<void> {
+/**
+ * Adds this run to the JSON history state.
+ *
+ * The callback version left the whole run hanging when the state was missing or empty, and it
+ * reported twice when the stored JSON could not be parsed or the state could not be written - the
+ * error went out first and the success right behind it. Both are settled here.
+ *
+ * @param props the run context and the historyJSON slice of the config
+ */
+export async function run(props: BackItUpProps<HistoryJsonOptions>): Promise<void> {
+    const { context: ctx, options } = props;
+
     // Build DP JSON
-    if (options.historyJSON.enabled && options.adapter) {
+    if (options.historyJSON.enabled && ctx.adapter) {
         let fileName: string | undefined;
-        let cb = callback;
 
         try {
-            const fileNames: string[] = JSON.parse(JSON.stringify(options.context.fileNames));
+            const fileNames: string[] = JSON.parse(JSON.stringify(ctx.fileNames));
             fileName = fileNames.shift();
 
             if (fileName && existsSync(fileName)) {
                 fileName = fileName ? fileName.replace(/\\/g, '/') : undefined;
             }
         } catch (err) {
-            log.error(`FileName error: ${err}`);
+            ctx.log.error(`FileName error: ${err}`);
         }
 
         try {
-            const state = await options.adapter.getStateAsync('history.json');
+            const state = await ctx.adapter.getStateAsync('history.json');
 
-            // Note: when the state is missing or empty nothing below runs and the callback is never
-            // invoked, which stalls the step chain. Left as found.
-            if (state && state.val) {
-                const historyListJSON = state.val as string;
-                let historyArrayJSON: HistoryJsonEntry[] | undefined;
+            if (!state || !state.val) {
+                ctx.log.debug('no history json state yet, nothing to add');
+                return;
+            }
+            const historyListJSON = state.val as string;
+            let historyArrayJSON: HistoryJsonEntry[] | undefined;
 
-                if (historyListJSON !== undefined) {
-                    try {
-                        historyArrayJSON = JSON.parse(historyListJSON);
-                    } catch (err) {
-                        log.error(`history error: ${err} Please reinstall BackItUp and run "iobroker fix"!!`);
-                    }
-                }
-
-                const errors = Object.keys(options.context.errors);
-                let errorMessage = '';
-
-                if (errors.length) {
-                    errorMessage = buildHistoryErrorLine(options.context.errors, options.historyJSON.systemLang);
-                } else {
-                    errorMessage = 'none';
-                }
-
-                const storage: string[] = [];
-
-                const targets: [HistoryTarget | undefined, string][] = [
-                    [options.ftp, 'FTP'],
-                    [options.cifs, 'NAS / Copy'],
-                    [options.dropbox, 'Dropbox'],
-                    [options.webdav, 'WebDAV'],
-                    [options.googledrive, 'Google Drive'],
-                    [options.onedrive, 'OneDrive'],
-                ];
-                for (const [target, label] of targets) {
-                    if (target && target.enabled) {
-                        storage.push(_(label, options.historyJSON.systemLang));
-                    }
-                }
-                if (!storage.length) {
-                    storage.push(_('Only stored locally', options.historyJSON.systemLang));
-                }
-
-                // push history to json
+            if (historyListJSON !== undefined) {
                 try {
-                    // Throws when the state did not hold parsable JSON - reported through the
-                    // callback below, as before.
-                    historyArrayJSON!.unshift({
-                        date: getTimeString(options.historyJSON.systemLang),
-                        name: fileName ? fileName.split('/').pop() : undefined,
-                        type: options.name,
-                        storage: storage.length > 1 ? storage : storage[0],
-                        filesize: await fileSizeCheck(fileName, log),
-                        error: errorMessage,
-                        timestamp: options.timestamp,
-                    });
+                    historyArrayJSON = JSON.parse(historyListJSON);
                 } catch (err) {
-                    cb?.(`history json could not be created: ${err}`);
+                    ctx.log.error(`history error: ${err} Please reinstall BackItUp and run "iobroker fix"!!`);
                 }
+            }
 
-                if (historyArrayJSON && historyArrayJSON.length > options.historyJSON.entriesNumber) {
-                    historyArrayJSON.splice(
-                        options.historyJSON.entriesNumber,
-                        historyArrayJSON.length - options.historyJSON.entriesNumber,
-                    );
+            const errors = Object.keys(ctx.errors);
+            let errorMessage = '';
+
+            if (errors.length) {
+                errorMessage = buildHistoryErrorLine(ctx.errors, options.historyJSON.systemLang);
+            } else {
+                errorMessage = 'none';
+            }
+
+            const storage: string[] = [];
+
+            const targets: [HistoryTarget | undefined, string][] = [
+                [options.ftp, 'FTP'],
+                [options.cifs, 'NAS / Copy'],
+                [options.dropbox, 'Dropbox'],
+                [options.webdav, 'WebDAV'],
+                [options.googledrive, 'Google Drive'],
+                [options.onedrive, 'OneDrive'],
+            ];
+            for (const [target, label] of targets) {
+                if (target && target.enabled) {
+                    storage.push(_(label, options.historyJSON.systemLang));
                 }
+            }
+            if (!storage.length) {
+                storage.push(_('Only stored locally', options.historyJSON.systemLang));
+            }
 
-                try {
-                    await options.adapter.setStateAsync('history.json', {
-                        val: JSON.stringify(historyArrayJSON),
-                        ack: true,
-                    });
-                    log.debug('new history json values created');
-                } catch (err) {
-                    cb?.(`history json could not be created: ${err}`);
-                }
+            // push history to json
+            try {
+            // Throws when the state did not hold parsable JSON.
+                historyArrayJSON!.unshift({
+                    date: getTimeString(options.historyJSON.systemLang),
+                    name: fileName ? fileName.split('/').pop() : undefined,
+                    type: options.name,
+                    storage: storage.length > 1 ? storage : storage[0],
+                    filesize: await fileSizeCheck(fileName, ctx.log),
+                    error: errorMessage,
+                    timestamp: ctx.timestamp,
+                });
+            } catch (err) {
+                // eslint-disable-next-line @typescript-eslint/only-throw-error
+                throw `history json could not be created: ${err}`;
+            }
 
-                cb?.(null, 'done');
-                cb = undefined;
+            if (historyArrayJSON && historyArrayJSON.length > options.historyJSON.entriesNumber) {
+                historyArrayJSON.splice(
+                    options.historyJSON.entriesNumber,
+                    historyArrayJSON.length - options.historyJSON.entriesNumber,
+                );
+            }
+
+            try {
+                await ctx.adapter.setStateAsync('history.json', {
+                    val: JSON.stringify(historyArrayJSON),
+                    ack: true,
+                });
+                ctx.log.debug('new history json values created');
+            } catch (err) {
+                // eslint-disable-next-line @typescript-eslint/only-throw-error
+                throw `history json could not be created: ${err}`;
             }
         } catch (err) {
-            cb?.(`history json could not be created: ${err}`);
+            // A plain string, as before: wrapping it in an Error would prefix the reported text.
+            // The two inner failures above already carry this wording and are rethrown unchanged.
+            // eslint-disable-next-line @typescript-eslint/only-throw-error
+            throw typeof err === 'string' ? err : `history json could not be created: ${err}`;
         }
-    } else {
-        callback?.();
     }
 }
 

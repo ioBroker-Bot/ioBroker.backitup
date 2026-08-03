@@ -2,10 +2,10 @@ import { createWriteStream } from 'node:fs';
 import { join } from 'node:path';
 import { authenticate } from 'dropbox-v2-api';
 
-import type { BackItUpConfigStorageDropbox, BackItUpStorage } from '../types';
+import type { BackItUpConfigStorageDropbox } from '../types';
 import type {
-    BackItUpGetFileCallback,
-    BackItUpListCallback,
+    BackItUpGetFileProps,
+    BackItUpListProps,
     BackItUpStorageEngineResult,
     BackItUpStorageEngineResultFile,
 } from './types';
@@ -65,13 +65,21 @@ function targetDir(dir: string, ownDir: boolean, dirMinimal: string): string {
     return result;
 }
 
+/**
+ * Lists the backups stored on Dropbox.
+ *
+ * @param props run context, storage config, requested source and backup types
+ */
 export async function list(
-    restoreSource: BackItUpStorage | '' | undefined,
-    options: DropboxOptions,
-    types: string[],
-    log: ioBroker.Logger,
-    callback?: BackItUpListCallback,
-): Promise<void> {
+    props: BackItUpListProps<DropboxOptions>,
+): Promise<BackItUpStorageEngineResult | undefined> {
+    const {
+        context: { log },
+        options,
+        restoreSource,
+        types,
+    } = props;
+
     const { dir: dbDir, ownDir, dirMinimal } = settings(options);
 
     // Token refresh
@@ -79,123 +87,116 @@ export async function list(
         db_accessToken = options.accessToken || '';
     }
 
-    if (db_accessToken && (!restoreSource || restoreSource === 'dropbox')) {
-        const dbx = authenticate({ token: db_accessToken });
-
-        const dir = targetDir(dbDir, ownDir, dirMinimal);
-
-        try {
-            dbx(
-                {
-                    resource: 'files/list_folder',
-                    parameters: {
-                        path: dir.replace(/^\/$/, ''),
-                    },
-                },
-                (err, result) => {
-                    if (err && err.error_summary) {
-                        log.error(`Dropbox: ${JSON.stringify(err.error_summary)}`);
-                    }
-                    if (result && result.entries) {
-                        const entries: BackItUpStorageEngineResultFile[] = (result.entries as any[])
-                            .map((file: any) => ({
-                                path: file.path_display,
-                                name: file.path_display.replace(/\\/g, '/').split('/').pop() as string,
-                                size: file.size,
-                            }))
-                            .filter(
-                                file =>
-                                    (types.indexOf(file.name.split('_')[0]) !== -1 ||
-                                        types.indexOf(file.name.split('.')[0]) !== -1) &&
-                                    file.name.split('.').pop() == 'gz',
-                            );
-
-                        const files: BackItUpStorageEngineResult = {};
-                        entries.forEach(file => {
-                            const type = file.name.split('_')[0];
-                            files[type] = files[type] || [];
-                            files[type].push(file);
-                        });
-
-                        callback?.(null, files, 'dropbox');
-                    } else {
-                        callback?.(
-                            `Dropbox: ${err?.error_summary ? JSON.stringify(err.error_summary) : 'Error on Dropbox list'}`,
-                        );
-                    }
-                },
-            );
-        } catch (e) {
-            setImmediate(() => callback?.(e as Error));
-        }
-    } else {
-        setImmediate(() => callback?.());
+    if (!db_accessToken || (restoreSource && restoreSource !== 'dropbox')) {
+        // Not configured, or another storage was asked for - nothing to file.
+        return undefined;
     }
+
+    const dbx = authenticate({ token: db_accessToken });
+    const dir = targetDir(dbDir, ownDir, dirMinimal);
+
+    return new Promise<BackItUpStorageEngineResult | undefined>((resolve, reject) => {
+        dbx(
+            {
+                resource: 'files/list_folder',
+                parameters: {
+                    path: dir.replace(/^\/$/, ''),
+                },
+            },
+            (err, result) => {
+                if (err && err.error_summary) {
+                    log.error(`Dropbox: ${JSON.stringify(err.error_summary)}`);
+                }
+                if (result && result.entries) {
+                    const entries: BackItUpStorageEngineResultFile[] = (result.entries as any[])
+                        .map((file: any) => ({
+                            path: file.path_display,
+                            name: file.path_display.replace(/\\/g, '/').split('/').pop() as string,
+                            size: file.size,
+                        }))
+                        .filter(
+                            file =>
+                                (types.indexOf(file.name.split('_')[0]) !== -1 ||
+                                    types.indexOf(file.name.split('.')[0]) !== -1) &&
+                                file.name.split('.').pop() == 'gz',
+                        );
+
+                    const files: BackItUpStorageEngineResult = {};
+                    entries.forEach(file => {
+                        const type = file.name.split('_')[0];
+                        files[type] = files[type] || [];
+                        files[type].push(file);
+                    });
+
+                    resolve(files);
+                } else {
+                    reject(
+                        `Dropbox: ${err?.error_summary ? JSON.stringify(err.error_summary) : 'Error on Dropbox list'}`,
+                    );
+                }
+            },
+        );
+    });
 }
 
-export async function getFile(
-    options: DropboxOptions,
-    fileName: string,
-    toStoreName: string,
-    log: ioBroker.Logger,
-    callback?: BackItUpGetFileCallback,
-): Promise<void> {
+/**
+ * Downloads one backup from Dropbox.
+ *
+ * @param props run context, storage config, the file to fetch and where to put it
+ */
+export async function getFile(props: BackItUpGetFileProps<DropboxOptions>): Promise<void> {
+    const {
+        context: { log },
+        options,
+        fileName,
+        toStoreName,
+    } = props;
+
     const { dir: dbDir, ownDir, dirMinimal } = settings(options);
 
     // Token refresh
     const accessToken = options.accessToken || '';
 
-    if (accessToken) {
-        // copy file to backupDir
-        const dbx = authenticate({ token: accessToken });
+    if (!accessToken) {
+        // eslint-disable-next-line @typescript-eslint/only-throw-error
+        throw 'Not configured';
+    }
 
-        const onlyFileName = fileName.split('/').pop() as string;
+    // copy file to backupDir
+    const dbx = authenticate({ token: accessToken });
+    const onlyFileName = fileName.split('/').pop() as string;
+    const dir = targetDir(dbDir, ownDir, dirMinimal);
 
-        const dir = targetDir(dbDir, ownDir, dirMinimal);
+    return new Promise<void>((resolve, reject) => {
+        // Settles at most once, whichever of the write stream and the request reports first -
+        // the promise takes over the guard the old `finish` helper provided.
+        const finish = (err?: Error | string | null): void => (err ? reject(err) : resolve());
 
-        // Fires at most once, whichever of the write stream and the request reports first.
-        let done: BackItUpGetFileCallback | undefined = callback;
-        const finish = (err?: Error | string | null): void => {
-            if (done) {
-                const fire = done;
-                done = undefined;
-                fire(err);
+        log.debug(`Dropbox: Download of "${fileName}" started`);
+
+        const writeStream = createWriteStream(toStoreName);
+        writeStream.on('error', err => {
+            if (err) {
+                log.error(`Dropbox: ${err}`);
             }
-        };
+            finish(err);
+        });
 
-        try {
-            log.debug(`Dropbox: Download of "${fileName}" started`);
-
-            const writeStream = createWriteStream(toStoreName);
-            writeStream.on('error', err => {
+        dbx(
+            {
+                resource: 'files/download',
+                parameters: {
+                    path: join(dir.replace(/^\/$/, ''), onlyFileName).replace(/\\/g, '/'),
+                },
+            },
+            err => {
                 if (err) {
                     log.error(`Dropbox: ${err}`);
+                } else {
+                    log.debug(`Dropbox: Download of "${fileName}" done`);
                 }
                 finish(err);
-            });
-
-            dbx(
-                {
-                    resource: 'files/download',
-                    parameters: {
-                        path: join(dir.replace(/^\/$/, ''), onlyFileName).replace(/\\/g, '/'),
-                    },
-                },
-                err => {
-                    if (err) {
-                        log.error(`Dropbox: ${err}`);
-                    } else {
-                        log.debug(`Dropbox: Download of "${fileName}" done`);
-                    }
-                    finish(err);
-                },
-            ).pipe(writeStream);
-        } catch (e) {
-            if (callback) {
-                setImmediate(() => finish(e as Error));
-            }
-        }
-    } else if (callback) {
-        setImmediate(() => callback('Not configured'));
-    }
+            },
+        ).pipe(writeStream);
+    });
 }

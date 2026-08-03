@@ -4,13 +4,10 @@ import { join } from 'node:path';
 import { ensureDirSync, removeSync } from 'fs-extra';
 
 import { copyFile, getDate } from '../tools';
-import { compress } from '../targz';
-import type { BackItUpExecuteContext } from '../types';
-import type { BackItUpScriptCallback } from './types';
+import { compressAsync } from '../targz';
+import type { BackItUpContext, BackItUpProps } from '../types';
 
 interface RedisOptions {
-    context: BackItUpExecuteContext;
-    backupDir: string;
     redisType?: 'local' | 'remote';
     /** dump file or directory for a local backup */
     path: string;
@@ -34,14 +31,28 @@ interface RedisOptions {
  */
 const desiredMode = '0o2775';
 
-export async function command(
-    options: RedisOptions,
-    log: ioBroker.Logger,
-    callback?: BackItUpScriptCallback,
-): Promise<void> {
-    log.debug('Start Redis Backup ...');
+/**
+ * Copies the redis dump into a temporary directory and packs it.
+ *
+ * The callback version could leave the whole backup run hanging in four different ways, all of them
+ * closed here:
+ *
+ * - a failed `redis-cli save` reported the error but never settled its promise, so the `await` in
+ *   the caller never returned;
+ * - no `.rdb` file in the configured directory meant nothing ran and nothing reported;
+ * - a `redisType` other than local or remote fell through the whole function without reporting;
+ * - and a failing `readdirSync` reported and then fell into the same empty-directory hang.
+ *
+ * In the opposite direction, several `.rdb` files packed the same archive once per file and
+ * reported once per file, which made lib/execute schedule all remaining steps that many times. The
+ * files are now copied first and the archive is written once.
+ *
+ * @param props the run context and the redis slice of the config
+ */
+export async function run(props: BackItUpProps<RedisOptions>): Promise<void> {
+    const { context: ctx, options } = props;
 
-    let cb = callback;
+    ctx.log.debug('Start Redis Backup ...');
 
     let nameSuffix;
     if (options.hostType === 'Slave') {
@@ -51,10 +62,10 @@ export async function command(
     }
 
     const fileName = join(
-        options.backupDir,
+        ctx.backupDir,
         `${options.redisType === 'remote' ? 'redis-remote' : 'redis'}_${getDate()}${nameSuffix ? `_${nameSuffix}` : ''}_backupiobroker.tar.gz`,
     );
-    const tmpDir = join(options.backupDir, 'redistmp').replace(/\\/g, '/');
+    const tmpDir = join(ctx.backupDir, 'redistmp').replace(/\\/g, '/');
 
     // The cast only silences the type; the value handed over is unchanged (see desiredMode).
     const modeArg = desiredMode as unknown as number;
@@ -62,220 +73,184 @@ export async function command(
     if (!existsSync(tmpDir)) {
         try {
             ensureDirSync(tmpDir, modeArg);
-            log.debug('Created redistmp directory');
+            ctx.log.debug('Created redistmp directory');
         } catch {
-            log.warn(`redis tmp directory "${tmpDir}" cannot created`);
+            ctx.log.warn(`redis tmp directory "${tmpDir}" cannot created`);
         }
     } else {
-        log.debug(`Try deleting the old redis tmp directory: "${tmpDir}"`);
+        ctx.log.debug(`Try deleting the old redis tmp directory: "${tmpDir}"`);
         try {
             removeSync(tmpDir);
         } catch {
-            log.warn(`old redis tmp directory "${tmpDir}" cannot deleted`);
+            ctx.log.warn(`old redis tmp directory "${tmpDir}" cannot deleted`);
         }
         if (!existsSync(tmpDir)) {
-            log.debug(`old redis tmp directory "${tmpDir}" successfully deleted`);
+            ctx.log.debug(`old redis tmp directory "${tmpDir}" successfully deleted`);
             try {
                 ensureDirSync(tmpDir, modeArg);
-                log.debug('Created new redistmp directory');
+                ctx.log.debug('Created new redistmp directory');
             } catch {
-                log.warn(`redis tmp directory "${tmpDir}" cannot created`);
+                ctx.log.warn(`redis tmp directory "${tmpDir}" cannot created`);
             }
         }
     }
 
-    options.context.fileNames.push(fileName);
+    ctx.fileNames.push(fileName);
 
     const timer = setInterval(() => {
         if (existsSync(fileName)) {
             const stats = statSync(fileName);
             const fileSize = Math.floor(stats.size / (1024 * 1024));
-            log.debug(`Packed ${fileSize}MB so far...`);
+            ctx.log.debug(`Packed ${fileSize}MB so far...`);
         }
     }, 10000);
 
-    /** Removes the temporary directory after a successful pack */
+    /**
+     * Removes the temporary directory after a successful pack.
+     *
+     * A directory that could not be removed used to be reported as a step failure on top of the
+     * success that followed it. The archive is written by then, so it only warns now.
+     */
     const dropTmp = (): void => {
         try {
-            log.debug(`Try deleting the redis tmp directory: "${tmpDir}"`);
+            ctx.log.debug(`Try deleting the redis tmp directory: "${tmpDir}"`);
             removeSync(tmpDir);
             if (!existsSync(tmpDir)) {
-                log.debug(`redis tmp directory "${tmpDir}" successfully deleted`);
+                ctx.log.debug(`redis tmp directory "${tmpDir}" successfully deleted`);
             }
         } catch (err) {
-            log.warn(`redis tmp directory "${tmpDir}" cannot deleted ... ${err}`);
-            cb?.(err as Error);
+            ctx.log.warn(`redis tmp directory "${tmpDir}" cannot deleted ... ${err}`);
         }
     };
 
-    if (options.redisType === 'local') {
-        let name: string | undefined;
-        let pth: string | undefined;
-        let data: string[] = [];
+    try {
+        if (options.redisType === 'local') {
+            let name: string | undefined;
+            let pth: string | undefined;
+            let data: string[] = [];
 
-        if (existsSync(options.path)) {
-            const stat = statSync(options.path);
-            if (!stat.isDirectory()) {
-                const parts = options.path.replace(/\\/g, '/').split('/');
-                name = parts.pop();
-                pth = parts.join('/');
-                data.push(name as string);
-            } else {
-                pth = options.path;
-                try {
+            if (existsSync(options.path)) {
+                const stat = statSync(options.path);
+                if (!stat.isDirectory()) {
+                    const parts = options.path.replace(/\\/g, '/').split('/');
+                    name = parts.pop();
+                    pth = parts.join('/');
+                    data.push(name as string);
+                } else {
+                    pth = options.path;
                     data = readdirSync(pth);
-                } catch (err) {
-                    cb?.(err as Error);
                 }
             }
-        }
-        // save aof
-        if (options.aof) {
-            // Note: bgSave never settles when `redis-cli save` fails, so this await can hang.
-            await bgSave(options, tmpDir, log, cb);
-        }
 
-        // Note: with several .rdb files this packs - and reports - once per file. And when no .rdb
-        // file is found nothing runs at all and the callback never fires. Kept as found.
-        data.forEach(file => {
-            const currentFiletype = file.split('.').pop();
+            // save aof
+            if (options.aof) {
+                await bgSave(ctx, tmpDir);
+            }
 
-            if (currentFiletype === 'rdb' && !file.startsWith('temp')) {
-                log.debug(`detected redis file: ${file} | file type: ${currentFiletype}`);
-                try {
+            const dumps = data.filter(file => file.split('.').pop() === 'rdb' && !file.startsWith('temp'));
+
+            if (!dumps.length) {
+                ctx.log.warn('no redis database found!!');
+                return;
+            }
+
+            for (const file of dumps) {
+                ctx.log.debug(`detected redis file: ${file} | file type: rdb`);
+                await new Promise<void>((resolve, reject) => {
                     copyFile(join(pth as string, file), join(tmpDir, file), err => {
                         if (err) {
-                            clearInterval(timer);
-                            options.context.errors.redis = err.toString();
-                            log.error(err as unknown as string);
-                            cb?.(err);
+                            ctx.errors.redis = err.toString();
+                            ctx.log.error(err);
+                            reject(err);
                         } else {
-                            compress(
-                                {
-                                    src: tmpDir,
-                                    dest: fileName,
-                                    tar: {
-                                        ignore: nm => !!name && name !== nm.replace(/\\/g, '/').split('/').pop(),
-                                    },
-                                },
-                                // lib/targz only ever passes an error; the stdout/stderr parameters
-                                // the original declared here were always undefined.
-                                packErr => {
-                                    clearInterval(timer);
-                                    if (packErr) {
-                                        options.context.errors.redis = packErr.toString();
-                                        cb?.(packErr);
-                                    } else {
-                                        log.debug(`Backup created: ${fileName}`);
-                                        options.context.done.push('redis');
-                                        options.context.types.push('redis');
-                                        dropTmp();
-                                        if (cb) {
-                                            cb(null);
-                                            cb = undefined;
-                                        }
-                                    }
-                                },
-                            );
+                            resolve();
                         }
                     });
-                } catch (err) {
-                    clearInterval(timer);
-                    cb?.(err as Error);
-                    cb = undefined;
-                }
+                });
             }
-        });
-    } else if (options.redisType === 'remote') {
-        try {
-            exec(
-                `redis-cli -u 'redis://${options.user && options.pass ? `${options.user}:${options.pass}@` : ''}${options.host}:${options.port}' --rdb ${join(tmpDir, 'dump.rdb').replace(/\\/g, '/')}`,
-                error => {
-                    if (error) {
-                        clearInterval(timer);
-                        // `ExecException` is declared as Omit<ErrnoException, 'code'>, which drops
-                        // the nominal Error identity; binding it back keeps toString() identical.
-                        const failure: Error = error;
-                        options.context.errors.redis = failure.toString();
-                        log.error(failure as unknown as string);
-                        cb?.(error);
-                    } else {
-                        compress(
-                            {
-                                src: tmpDir,
-                                dest: fileName,
-                            },
-                            packErr => {
-                                clearInterval(timer);
-                                if (packErr) {
-                                    options.context.errors.redis = packErr.toString();
-                                    cb?.(packErr);
-                                } else {
-                                    log.debug(`Backup created: ${fileName}`);
-                                    options.context.done.push('redis');
-                                    options.context.types.push('redis');
-                                    dropTmp();
-                                    if (cb) {
-                                        cb(null);
-                                        cb = undefined;
-                                    }
-                                }
-                            },
-                        );
-                    }
-                },
-            );
-        } catch (err) {
-            clearInterval(timer);
-            cb?.(err as Error);
-            cb = undefined;
+
+            try {
+                await compressAsync({
+                    src: tmpDir,
+                    dest: fileName,
+                    tar: {
+                        ignore: nm => !!name && name !== nm.replace(/\\/g, '/').split('/').pop(),
+                    },
+                });
+            } catch (err) {
+                ctx.errors.redis = (err as Error).toString();
+                throw err;
+            }
+        } else if (options.redisType === 'remote') {
+            await new Promise<void>((resolve, reject) => {
+                exec(
+                    `redis-cli -u 'redis://${options.user && options.pass ? `${options.user}:${options.pass}@` : ''}${options.host}:${options.port}' --rdb ${join(tmpDir, 'dump.rdb').replace(/\\/g, '/')}`,
+                    error => {
+                        if (error) {
+                            // `ExecException` is declared as Omit<ErrnoException, 'code'>, which
+                            // drops the nominal Error identity; binding it back keeps toString()
+                            // identical.
+                            const failure: Error = error;
+                            ctx.errors.redis = failure.toString();
+                            ctx.log.error(failure);
+                            reject(failure);
+                        } else {
+                            resolve();
+                        }
+                    },
+                );
+            });
+
+            try {
+                await compressAsync({ src: tmpDir, dest: fileName });
+            } catch (err) {
+                ctx.errors.redis = (err as Error).toString();
+                throw err;
+            }
+        } else {
+            // Neither local nor remote: the original left the run without any report at all.
+            ctx.log.warn(`unknown redis backup type "${options.redisType}"`);
+            return;
         }
+    } finally {
+        clearInterval(timer);
     }
-    // Note: any other redisType leaves the step without a callback.
+
+    ctx.log.debug(`Backup created: ${fileName}`);
+    ctx.done.push('redis');
+    ctx.types.push('redis');
+    dropTmp();
 }
 
 /**
  * Asks redis to write its dump before the files are copied.
  *
- * On failure the promise is neither resolved nor rejected, so the caller's `await` never returns -
- * the error only reaches the callback. Kept as found.
- *
- * @param options script options, for the error store
+ * @param ctx run context, for the error store and the logger
  * @param tmpDir temporary directory that is removed on failure
- * @param log adapter logger
- * @param callback reports the failure
  */
-function bgSave(
-    options: RedisOptions,
-    tmpDir: string,
-    log: ioBroker.Logger,
-    callback?: BackItUpScriptCallback,
-): Promise<string> {
-    return new Promise(resolve => {
-        log.debug('redis-cli save started, please wait ...');
+async function bgSave(ctx: BackItUpContext, tmpDir: string): Promise<void> {
+    return new Promise((resolve, reject) => {
+        ctx.log.debug('redis-cli save started, please wait ...');
 
-        let localCallback = callback;
-
-        exec(`redis-cli save`, (error, stdout, stderr) => {
+        exec(`redis-cli save`, error => {
             if (error) {
                 const failure: Error = error;
-                options.context.errors.redis = failure.toString();
+                ctx.errors.redis = failure.toString();
                 try {
-                    log.debug(`Try deleting the redis tmp directory: "${tmpDir}"`);
+                    ctx.log.debug(`Try deleting the redis tmp directory: "${tmpDir}"`);
                     removeSync(tmpDir);
                     if (!existsSync(tmpDir)) {
-                        log.debug(`redis tmp directory "${tmpDir}" successfully deleted`);
+                        ctx.log.debug(`redis tmp directory "${tmpDir}" successfully deleted`);
                     }
                 } catch (err) {
-                    log.warn(`redis tmp directory "${tmpDir}" cannot deleted ... ${err}`);
-                    localCallback?.(err as Error);
-                    localCallback = undefined;
+                    // A warning now: the save error below is the one that matters, and the original
+                    // could report both.
+                    ctx.log.warn(`redis tmp directory "${tmpDir}" cannot deleted ... ${err}`);
                 }
-                localCallback?.(error);
-                localCallback = undefined;
+                reject(failure);
             } else {
-                log.debug('redis-cli save finish');
-                resolve(stdout ? stdout : stderr);
+                ctx.log.debug('redis-cli save finish');
+                resolve();
             }
         });
     });

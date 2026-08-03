@@ -25,12 +25,13 @@ import type * as HttpModule from 'node:http';
 import type * as HttpsModule from 'node:https';
 import type * as ToolsModule from './tools';
 import type { BackItUpStorageEngine } from './list/types';
-import type { BackItUpConfigStorage } from './types';
+import type { BackItUpContext } from './types';
 import type {
-    BackItUpAnyRestoreModule,
-    BackItUpRestoreCallback,
+    BackItUpRestoreFailure,
     BackItUpRestoreLogger,
+    BackItUpRestoreModule,
     BackItUpRestoreOptions,
+    BackItUpRestoreResultCode,
 } from './restore/types';
 
 /** What `restore()` reports back to its caller */
@@ -161,8 +162,29 @@ export function getFile(
         const config = getConfig(options, backupType, storageType);
         if (storageType !== 'local') {
             // eslint-disable-next-line @typescript-eslint/no-require-imports
-            const _getFile = (require(`./list/${storageType}`) as BackItUpStorageEngine).getFile;
-            _getFile(config as BackItUpConfigStorage, fileName, toSaveName, log, callback);
+            const engine = require(`./list/${storageType}`) as BackItUpStorageEngine;
+            // Downloading only needs the logger; the scratch pad belongs to a backup run.
+            const context: BackItUpContext = {
+                adapter: null,
+                log,
+                backupDir: toSaveName.substring(0, toSaveName.lastIndexOf('/') + 1),
+                timestamp: 0,
+                fileNames: [],
+                errors: {},
+                done: [],
+                types: [],
+            };
+            engine
+                .getFile({
+                    context,
+                    options: config as never,
+                    fileName,
+                    toStoreName: toSaveName,
+                })
+                .then(
+                    () => callback(),
+                    (e: Error) => callback(e),
+                );
         } else {
             // eslint-disable-next-line @typescript-eslint/no-require-imports
             const tools = require('./tools') as typeof ToolsModule;
@@ -239,6 +261,34 @@ function startIOB(bashDir: string): void {
             }, 30 * 1000);
         },
     );
+}
+
+/**
+ * Builds the run context a restore step gets.
+ *
+ * A restore has no scratch pad to share - the four arrays exist only because the steps and the
+ * backup steps use the same {@link BackItUpContext}. `warn` maps onto the restore logger's debug
+ * level; that logger has no warn of its own, and no step uses it.
+ *
+ * @param log the restore logger for this step
+ * @param adapter adapter instance, or null in the detached run
+ * @param config the step's config slice, for the backup directory
+ */
+function makeContext(
+    log: BackItUpRestoreLogger,
+    adapter: ioBroker.Adapter | null,
+    config: BackItUpRestoreOptions,
+): BackItUpContext {
+    return {
+        fileNames: [],
+        errors: {},
+        done: [],
+        types: [],
+        adapter,
+        log: { debug: text => log.debug(text), warn: text => log.debug(text), error: text => log.error(text) },
+        backupDir: config.backupDir,
+        timestamp: new Date().getTime(),
+    };
 }
 
 /**
@@ -354,7 +404,7 @@ export function restore(
                 config.name = config.name || backupType;
 
                 // eslint-disable-next-line @typescript-eslint/no-require-imports
-                const _module = require(`./restore/${backupType}`) as BackItUpAnyRestoreModule;
+                const _module = require(`./restore/${backupType}`) as BackItUpRestoreModule;
 
                 if (_module.isStop) {
                     if (backupType === 'iobroker' && existsSync(bashDir!)) {
@@ -385,18 +435,18 @@ export function restore(
                     callback?.({ error: '' });
                     return;
                 }
-                const restoreStep = _module.restore as (
-                    options: unknown,
-                    fileName: string,
-                    log: BackItUpRestoreLogger,
-                    adapter: ioBroker.Adapter,
-                    callback: BackItUpRestoreCallback,
-                ) => void;
-
-                restoreStep(config, toSaveName, log, adapter, (err, exitCode) => {
-                    log.exit(exitCode);
-                    callback({ error: err, exitCode });
-                });
+                _module
+                    .restore({ context: makeContext(log, adapter, config), options: config as never, fileName: toSaveName })
+                    .then(
+                        (exitCode: BackItUpRestoreResultCode) => {
+                            log.exit(exitCode);
+                            callback({ error: undefined, exitCode });
+                        },
+                        (e: BackItUpRestoreFailure) => {
+                            log.exit(e?.exitCode);
+                            callback({ error: e, exitCode: e?.exitCode });
+                        },
+                    );
             } else {
                 callback({ error: err || `File ${toSaveName} not found` });
             }
@@ -405,17 +455,19 @@ export function restore(
         try {
             const config = options as BackItUpRestoreOptions;
             // eslint-disable-next-line @typescript-eslint/no-require-imports
-            const _module = require(`./restore/${config.backupType}`) as BackItUpAnyRestoreModule;
-            const restoreStep = _module.restore as (
-                options: unknown,
-                fileName: string,
-                log: BackItUpRestoreLogger,
-                callback: BackItUpRestoreCallback,
-            ) => void;
-            restoreStep(config, config.fileName!, log, (err, exitCode) => {
-                log.exit(exitCode);
-                callback({ error: err, exitCode });
-            });
+            const _module = require(`./restore/${config.backupType}`) as BackItUpRestoreModule;
+            _module
+                .restore({ context: makeContext(log, null, config), options: config as never, fileName: config.fileName! })
+                .then(
+                    (exitCode: BackItUpRestoreResultCode) => {
+                        log.exit(exitCode);
+                        callback({ error: undefined, exitCode });
+                    },
+                    (e: BackItUpRestoreFailure) => {
+                        log.error(e);
+                        log.exit(e?.exitCode ?? -1);
+                    },
+                );
         } catch (e) {
             log.error(e);
             log.exit(-1);

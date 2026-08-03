@@ -3,23 +3,29 @@ import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { ensureDirSync, removeSync } from 'fs-extra';
 
-import { decompress } from '../targz';
-import type { BackItUpRestoreCallback, BackItUpRestoreLogger, BackItUpRestoreOptions } from './types';
+import { delay } from '../tools';
+import { decompressAsync } from '../targz';
+import type { BackItUpContext } from '../types';
+import type { BackItUpRestoreOptions, BackItUpRestoreProps, BackItUpRestoreResultCode } from './types';
 
-/** Module level, so a second restore overwrites the handles of the first. Kept as found. */
-let waitRestore: NodeJS.Timeout | undefined;
-let timerDone: NodeJS.Timeout | undefined;
+/** How long the original waited before unpacking, and again before reporting */
+const WAIT_MS = 2000;
 
+/**
+ * Restores the javascript adapter's scripts.
+ *
+ * The callback version reported twice on success - once with the "done" marker and once bare - so
+ * lib/restore ran its handler two times. It reports once now.
+ *
+ * @param props the run context, the javascripts slice of the config and the archive
+ */
 export async function restore(
-    options: BackItUpRestoreOptions,
-    fileName: string,
-    log: BackItUpRestoreLogger,
-    adapter: ioBroker.Adapter,
-    callback?: BackItUpRestoreCallback,
-): Promise<void> {
-    let cb = callback;
+    props: BackItUpRestoreProps<BackItUpRestoreOptions>,
+): Promise<BackItUpRestoreResultCode> {
+    const { context: ctx, options, fileName } = props;
+    const adapter = ctx.adapter!;
 
-    log.debug('Start Javascript Restore ...');
+    ctx.log.debug('Start Javascript Restore ...');
 
     // stop Javascript-Adapter before Restore
     let startAfterRestore = false;
@@ -29,7 +35,7 @@ export async function restore(
     void adapter.getObjectView(
         'system',
         'instance',
-        { startkey: 'system.adapter.javascript.', endkey: 'system.adapter.javascript.\u9999' },
+        { startkey: 'system.adapter.javascript.', endkey: 'system.adapter.javascript.香' },
         (err, instances) => {
             const resultInstances: { id: string; config: unknown }[] = [];
             if (!err && instances && instances.rows) {
@@ -45,17 +51,17 @@ export async function restore(
                     void adapter.getForeignObject(`system.adapter.${_id}`, (err, obj) => {
                         if (obj?.common?.enabled) {
                             void adapter.setForeignState(`system.adapter.${_id}.alive`, false);
-                            log.debug(`${_id} is stopped`);
+                            ctx.log.debug(`${_id} is stopped`);
                             enabledInstances.push(_id);
                             // Spelled out; the original interpolated the array, which is the same
                             // comma-joined string.
-                            log.debug(`enabled Instances: ${enabledInstances.join(',')}`);
+                            ctx.log.debug(`enabled Instances: ${enabledInstances.join(',')}`);
                             startAfterRestore = true;
                         }
                     });
                 }
             } else {
-                log.debug('Could not retrieve javascript instances!');
+                ctx.log.debug('Could not retrieve javascript instances!');
             }
         },
     );
@@ -65,105 +71,68 @@ export async function restore(
     if (!existsSync(tmpDir)) {
         try {
             ensureDirSync(tmpDir, desiredMode as unknown as number);
-            log.debug(`Created javascript_tmp directory: "${tmpDir}"`);
+            ctx.log.debug(`Created javascript_tmp directory: "${tmpDir}"`);
         } catch (err) {
-            log.debug(`Javascript tmp directory "${tmpDir}" cannot created ... ${err}`);
+            ctx.log.debug(`Javascript tmp directory "${tmpDir}" cannot created ... ${err}`);
         }
     } else {
         try {
-            log.debug(`Try deleting the old javascript_tmp directory: "${tmpDir}"`);
+            ctx.log.debug(`Try deleting the old javascript_tmp directory: "${tmpDir}"`);
             removeSync(tmpDir);
         } catch (err) {
-            log.debug(`Javascript tmp directory "${tmpDir}" cannot deleted ... ${err}`);
+            ctx.log.debug(`Javascript tmp directory "${tmpDir}" cannot deleted ... ${err}`);
         }
         if (!existsSync(tmpDir)) {
             try {
-                log.debug(`old javascript_tmp directory "${tmpDir}" successfully deleted`);
+                ctx.log.debug(`old javascript_tmp directory "${tmpDir}" successfully deleted`);
                 ensureDirSync(tmpDir, desiredMode as unknown as number);
-                log.debug('Created javascript_tmp directory');
+                ctx.log.debug('Created javascript_tmp directory');
             } catch (err) {
-                log.debug(`Javascript tmp directory "${tmpDir}" cannot created ... ${err}`);
+                ctx.log.debug(`Javascript tmp directory "${tmpDir}" cannot created ... ${err}`);
             }
         }
     }
 
+    ctx.log.debug('decompress started ...');
+
+    await delay(WAIT_MS);
+
     try {
-        log.debug('decompress started ...');
-
-        waitRestore = setTimeout(
-            () =>
-                decompress(
-                    {
-                        src: fileName,
-                        dest: tmpDir,
-                    },
-                    // lib/targz only ever passes an error, so the `stderr` the original forwarded
-                    // as the exit code was always undefined.
-                    async err => {
-                        if (err) {
-                            log.error(err);
-                            if (cb) {
-                                log.error('Javascript Restore not completed');
-                                cb(err);
-                                cb = undefined;
-                                clearTimeout(timerDone);
-                                clearTimeout(waitRestore);
-                            }
-                        } else {
-                            await restoreJavascriptObjects(tmpDir, adapter, log);
-
-                            try {
-                                log.debug(`Try deleting the Javascript tmp directory: "${tmpDir}"`);
-                                removeSync(tmpDir);
-                                if (!existsSync(tmpDir)) {
-                                    log.debug(`Javascript tmp directory "${tmpDir}" successfully deleted`);
-                                }
-                            } catch (err) {
-                                log.debug(`Javascript tmp directory "${tmpDir}" cannot deleted ... ${err}`);
-                            }
-
-                            if (cb) {
-                                // Start javascript Instances
-                                if (startAfterRestore) {
-                                    enabledInstances.forEach(enabledInstance => {
-                                        void adapter.getForeignObject(
-                                            `system.adapter.${enabledInstance}`,
-                                            (err, obj) => {
-                                                if (obj && !obj.common?.enabled) {
-                                                    void adapter.setForeignState(
-                                                        `system.adapter.${enabledInstance}.alive`,
-                                                        true,
-                                                    );
-                                                    log.debug(`${enabledInstance} started`);
-                                                }
-                                            },
-                                        );
-                                    });
-                                }
-                                timerDone = setTimeout(() => {
-                                    log.debug('Javascript Restore completed successfully');
-                                    // Reported twice: once with the "done" marker and once bare,
-                                    // so lib/restore.js runs its handler two times. Kept as found.
-                                    cb!(null, 'javascript restore done');
-                                    cb!(null);
-                                    cb = undefined;
-                                    clearTimeout(timerDone);
-                                    clearTimeout(waitRestore);
-                                }, 2000);
-                            }
-                        }
-                    },
-                ),
-            2000,
-        );
-    } catch (e) {
-        if (cb) {
-            cb(e);
-            cb = undefined;
-            clearTimeout(timerDone);
-            clearTimeout(waitRestore);
-        }
+        await decompressAsync({ src: fileName, dest: tmpDir });
+    } catch (err) {
+        ctx.log.error(err);
+        ctx.log.error('Javascript Restore not completed');
+        throw err;
     }
+
+    await restoreJavascriptObjects(ctx, tmpDir);
+
+    try {
+        ctx.log.debug(`Try deleting the Javascript tmp directory: "${tmpDir}"`);
+        removeSync(tmpDir);
+        if (!existsSync(tmpDir)) {
+            ctx.log.debug(`Javascript tmp directory "${tmpDir}" successfully deleted`);
+        }
+    } catch (err) {
+        ctx.log.debug(`Javascript tmp directory "${tmpDir}" cannot deleted ... ${err}`);
+    }
+
+    // Start javascript Instances
+    if (startAfterRestore) {
+        enabledInstances.forEach(enabledInstance => {
+            void adapter.getForeignObject(`system.adapter.${enabledInstance}`, (err, obj) => {
+                if (obj && !obj.common?.enabled) {
+                    void adapter.setForeignState(`system.adapter.${enabledInstance}.alive`, true);
+                    ctx.log.debug(`${enabledInstance} started`);
+                }
+            });
+        });
+    }
+
+    await delay(WAIT_MS);
+
+    ctx.log.debug('Javascript Restore completed successfully');
+    return 'javascript restore done';
 }
 
 /**
@@ -171,15 +140,12 @@ export async function restore(
  *
  * Always resolves - every failure is only logged.
  *
+ * @param ctx run context, for the adapter and the logger
  * @param tmpDir directory the backup was unpacked into
- * @param adapter adapter instance used for the object access
- * @param log restore logger
  */
-async function restoreJavascriptObjects(
-    tmpDir: string,
-    adapter: ioBroker.Adapter,
-    log: BackItUpRestoreLogger,
-): Promise<void> {
+async function restoreJavascriptObjects(ctx: BackItUpContext, tmpDir: string): Promise<void> {
+    const adapter = ctx.adapter!;
+
     try {
         const object = await readFile(join(tmpDir, 'script.json'));
 
@@ -194,7 +160,7 @@ async function restoreJavascriptObjects(
                 try {
                     _object = await adapter.getForeignObjectAsync(jsObjects[i]._id);
                 } catch (err) {
-                    log.debug(err);
+                    ctx.log.debug(err);
                 }
                 if (_object) {
                     try {
@@ -202,10 +168,10 @@ async function restoreJavascriptObjects(
                         const scriptCheck = await adapter.getForeignObjectAsync(jsObjects[i]._id);
 
                         if (scriptCheck) {
-                            log.debug(`Restore Script: ${jsObjects[i]._id.split('.').pop()}`);
+                            ctx.log.debug(`Restore Script: ${jsObjects[i]._id.split('.').pop()}`);
                         }
                     } catch (err) {
-                        log.debug(`Error on set Object: ${err}`);
+                        ctx.log.debug(`Error on set Object: ${err}`);
                     }
                 } else {
                     try {
@@ -213,16 +179,16 @@ async function restoreJavascriptObjects(
                         const scriptCheck = await adapter.getForeignObjectAsync(jsObjects[i]._id);
 
                         if (scriptCheck) {
-                            log.debug(`Added Script: ${jsObjects[i]._id.split('.').pop()}`);
+                            ctx.log.debug(`Added Script: ${jsObjects[i]._id.split('.').pop()}`);
                         }
                     } catch (err) {
-                        log.debug(`Error on create Object: ${err}`);
+                        ctx.log.debug(`Error on create Object: ${err}`);
                     }
                 }
             }
         }
     } catch (err) {
-        log.debug(`Error on Javascript-Restore: ${err}`);
+        ctx.log.debug(`Error on Javascript-Restore: ${err}`);
     }
 }
 

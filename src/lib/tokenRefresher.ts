@@ -212,4 +212,4 @@ class TokenRefresher {
     }
 }
 
-export = TokenRefresher;
+export default TokenRefresher;

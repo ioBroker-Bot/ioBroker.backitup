@@ -1,3 +1,4 @@
+import type { BackItUpLogger } from './types';
 import { drive_v3 } from '@googleapis/drive';
 import { OAuth2Client, type Credentials } from 'google-auth-library';
 import { createWriteStream, type WriteStream } from 'node:fs';
@@ -15,12 +16,12 @@ type GoogleDriveFile = drive_v3.Schema$File;
 type IdCallback = (error?: Error | string | null, folderId?: string | null) => void;
 type ListCallback = (error?: Error | string | null, list?: GoogleDriveFile[]) => void;
 
-/** Only the logging surface this class needs - `ioBroker.Logger` satisfies it */
+/** Only the logging surface this class needs - `BackItUpLogger` satisfies it */
 interface Logger {
     error: (message: string) => void;
 }
 
-class GoogleDrive {
+export default class GoogleDrive {
     private readonly oAuth2Client: OAuth2Client;
     private readonly newToken: boolean | string | undefined;
     private drive: drive_v3.Drive | null;
@@ -390,5 +391,3 @@ class GoogleDrive {
         });
     }
 }
-
-export = GoogleDrive;

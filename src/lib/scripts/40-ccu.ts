@@ -5,8 +5,7 @@ import { join } from 'node:path';
 import axios from 'axios';
 
 import { getDate } from '../tools';
-import type { BackItUpExecuteContext } from '../types';
-import type { BackItUpScriptCallback } from './types';
+import type { BackItUpContext, BackItUpProps } from '../types';
 
 interface CcuEvent {
     host: string;
@@ -18,8 +17,6 @@ interface CcuEvent {
 }
 
 interface CcuOptions {
-    context: BackItUpExecuteContext;
-    backupDir: string;
     host: string;
     user: string;
     pass: string;
@@ -30,11 +27,14 @@ interface CcuOptions {
     ccuEvents: CcuEvent[];
 }
 
-export async function command(
-    options: CcuOptions,
-    log: ioBroker.Logger,
-    callback?: BackItUpScriptCallback,
-): Promise<void> {
+/**
+ * Downloads a backup from every configured CCU.
+ *
+ * @param props the run context and the ccu slice of the config
+ */
+export async function run(props: BackItUpProps<CcuOptions>): Promise<void> {
+    const { context: ctx, options } = props;
+
     if (options.ccuMulti) {
         // The per-event settings are written onto `options` itself, one CCU after another.
         for (let i = 0; i < options.ccuEvents.length; i++) {
@@ -45,25 +45,21 @@ export async function command(
             options.nameSuffix = options.ccuEvents[i].nameSuffix;
             options.signedCertificates = options.ccuEvents[i].signedCertificates;
 
-            log.debug(`CCU-Backup for ${options.nameSuffix} is started ...`);
+            ctx.log.debug(`CCU-Backup for ${options.nameSuffix} is started ...`);
             // `startBackup` takes two parameters; the callback the original passed as a third was
             // silently dropped. Removed rather than wired up.
-            await startBackup(options, log);
-            log.debug(`CCU-Backup for ${options.nameSuffix} is finish`);
+            await startBackup(ctx, options);
+            ctx.log.debug(`CCU-Backup for ${options.nameSuffix} is finish`);
         }
         // Reported as done even when a CCU failed - kept as found.
-        options.context.done.push('ccu');
-        options.context.types.push('homematic');
-        callback?.();
-        return;
-    } else if (!options.ccuMulti) {
-        log.debug('CCU-Backup started ...');
-        const ccuBackup = await startBackup(options, log);
-        log.debug(ccuBackup);
-        options.context.done.push('ccu');
-        options.context.types.push('homematic');
-        callback?.();
-        return;
+        ctx.done.push('ccu');
+        ctx.types.push('homematic');
+    } else {
+        ctx.log.debug('CCU-Backup started ...');
+        const ccuBackup = await startBackup(ctx, options);
+        ctx.log.debug(ccuBackup);
+        ctx.done.push('ccu');
+        ctx.types.push('homematic');
     }
 }
 
@@ -72,10 +68,10 @@ export async function command(
  *
  * Always resolves - failures are recorded in `context.errors.ccu` and returned as text.
  *
+ * @param ctx run context
  * @param options script options, already pointed at the CCU to back up
- * @param log adapter logger
  */
-async function startBackup(options: CcuOptions, log: ioBroker.Logger): Promise<string> {
+async function startBackup(ctx: BackItUpContext, options: CcuOptions): Promise<string> {
     return new Promise(resolve => {
         void (async (): Promise<void> => {
             const connectType = options.usehttps ? 'https' : 'http';
@@ -114,7 +110,7 @@ async function startBackup(options: CcuOptions, log: ioBroker.Logger): Promise<s
                 const sid = loginResponse.data.result;
                 if (!sid) {
                     const message = 'CCU: No session ID';
-                    options.context.errors.ccu = message;
+                    ctx.errors.ccu = message;
                     safeResolve(message);
                     return;
                 }
@@ -127,13 +123,13 @@ async function startBackup(options: CcuOptions, log: ioBroker.Logger): Promise<s
                 const version = (versionResponse.data || '').split('\n')[0].split('=')[1] || 'Unknown';
 
                 const fileName = join(
-                    options.backupDir,
+                    ctx.backupDir,
                     `homematic_${getDate()}${options.nameSuffix ? `_${options.nameSuffix}` : ''}_${version}_backupiobroker.tar.sbk`,
                 );
 
-                options.context.fileNames.push(fileName);
+                ctx.fileNames.push(fileName);
 
-                log.debug('Requesting backup from CCU');
+                ctx.log.debug('Requesting backup from CCU');
 
                 const protocolType = connectType === 'https' ? https : http;
                 const writeStream = createWriteStream(fileName);
@@ -201,7 +197,7 @@ async function startBackup(options: CcuOptions, log: ioBroker.Logger): Promise<s
                     }
 
                     if (backupError) {
-                        options.context.errors.ccu = backupError;
+                        ctx.errors.ccu = backupError;
                         safeResolve(backupError);
                         return;
                     }
@@ -210,7 +206,7 @@ async function startBackup(options: CcuOptions, log: ioBroker.Logger): Promise<s
                 });
             } catch (err) {
                 const message = (err as Error).message || String(err);
-                options.context.errors.ccu = message;
+                ctx.errors.ccu = message;
                 safeResolve(message);
             }
         })();

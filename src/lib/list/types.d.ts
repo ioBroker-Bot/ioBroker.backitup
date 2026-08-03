@@ -1,4 +1,4 @@
-import type { BackItUpStorage, BackItUpConfigStorage } from '../types';
+import type { BackItUpProps, BackItUpStorage } from '../types';
 
 export type BackItUpStorageEngineResultFile = {
     path: string;
@@ -51,23 +51,46 @@ export type BackItUpListCallback = (
     storage?: BackItUpStorageKey,
 ) => void;
 
-export type BackItUpGetFileCallback = (error?: Error | string | null) => void;
+
+export interface BackItUpListProps<TOptions = never> extends BackItUpProps<TOptions> {
+    /** list only this storage; empty or undefined means "whatever this engine holds" */
+    readonly restoreSource: BackItUpStorage | '' | undefined;
+    /** backup types to look for */
+    readonly types: string[];
+}
+
+export interface BackItUpGetFileProps<TOptions = never> extends BackItUpProps<TOptions> {
+    /** the file as the storage names it */
+    readonly fileName: string;
+    /** where to put it locally */
+    readonly toStoreName: string;
+}
 
 /** Contract every module under lib/list/ implements */
 export interface BackItUpStorageEngine {
-    list(
-        restoreSource: BackItUpStorage | '' | undefined,
-        options: BackItUpConfigStorage,
-        types: string[],
-        log: ioBroker.Logger,
-        callback: BackItUpListCallback,
-    ): void;
+    /**
+     * Lists the backups this storage holds, grouped by backup type.
+     *
+     * Resolving with `undefined` means "not my `restoreSource`, nothing to file" - the caller then
+     * skips this engine instead of filing an empty entry for it. An empty object, by contrast, is a
+     * real answer: the storage was queried and holds nothing.
+     *
+     * @param props the run context, the storage config and what to look for
+     */
+    list(props: BackItUpListProps): Promise<BackItUpStorageEngineResult | undefined>;
 
-    getFile(
-        options: BackItUpConfigStorage,
-        fileName: string,
-        toStoreName: string,
-        log: ioBroker.Logger,
-        callback: BackItUpGetFileCallback,
-    ): void;
+    /**
+     * Downloads one backup into the local backup directory.
+     *
+     * @param props the run context, the storage config and the file to fetch
+     */
+    getFile(props: BackItUpGetFileProps): Promise<void>;
+
+    /**
+     * Key the result is filed under, when it differs from the module name.
+     *
+     * Only lib/list/cifs sets it: it reports as 'nas / copy', which is what the restore tab and
+     * lib/restore address a NAS source by.
+     */
+    storageKey?: BackItUpStorageKey;
 }

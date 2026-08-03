@@ -1,5 +1,5 @@
 import { _ } from './tools';
-import type { BackItUpExecuteContext } from './types';
+import type { BackItUpContext, BackItUpExecuteContext } from './types';
 
 /**
  * Shared message building for the `96-*` notification steps.
@@ -30,7 +30,6 @@ interface StorageEntry {
  * targets and every credential that has to be masked.
  */
 export interface NotificationOptions {
-    context: BackItUpExecuteContext;
     backupDir: string;
     ftp?: StorageEntry & { pass?: string };
     cifs?: StorageEntry & { pass?: string };
@@ -70,11 +69,16 @@ function mask(text: string, secret: string | undefined): string {
 /**
  * Builds the "backup incomplete" text that every notification channel sends.
  *
+ * @param context the run context, for the errors the steps collected
  * @param options the script options, for the credentials that need masking
  * @param systemLang language of the notification
  */
-export function buildErrorMessage(options: NotificationOptions, systemLang: string): string {
-    const errors = options.context.errors;
+export function buildErrorMessage(
+    context: BackItUpContext,
+    options: NotificationOptions,
+    systemLang: string,
+): string {
+    const errors = context.errors;
 
     let errorMessage = _('Your backup was not completely created. Please check the errors!!', systemLang);
 

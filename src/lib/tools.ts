@@ -105,9 +105,10 @@ export function getNextTimeString(systemLang: string, nextDate: Date): string {
 export function _(word: string, systemLang?: string): string {
     // A computed path, so this has to stay a require - and it keeps the behaviour of reading only
     // the language actually in use instead of bundling all eleven translation files.
+    // Two levels up: this compiles to build/lib/tools.js, and admin/ stays at the adapter root.
     // eslint-disable-next-line @typescript-eslint/no-require-imports
     const translations: Record<string, string> = require(
-        `../admin/i18n/${systemLang ? systemLang : 'en'}/translations.json`,
+        `../../admin/i18n/${systemLang ? systemLang : 'en'}/translations.json`,
     );
 
     if (translations[word]) {
@@ -116,6 +117,18 @@ export function _(word: string, systemLang?: string): string {
 
     console.warn(`Please translate in translations.json: ${word}`);
     return word;
+}
+
+/**
+ * Resolves after the given number of milliseconds.
+ *
+ * The notification steps all wait before they report, so that wait is expressed once here instead
+ * of wrapping every step body in a `setTimeout` callback.
+ *
+ * @param ms how long to wait
+ */
+export async function delay(ms?: number): Promise<void> {
+    return new Promise(resolve => setTimeout(resolve, ms));
 }
 
 /**

@@ -1,3 +1,4 @@
+import type { BackItUpLogger } from './types';
 import { createReadStream, statSync } from 'node:fs';
 import { join } from 'node:path';
 import type { Readable } from 'node:stream';
@@ -6,8 +7,8 @@ import type { authenticate } from 'dropbox-v2-api';
 type DropboxClient = ReturnType<typeof authenticate>;
 type ChunkStreamFactory = (start: number, end: number) => Readable;
 
-class DropBox {
-    sessionUpload(dropbox: DropboxClient, fileName: string, dir: string, log: ioBroker.Logger): Promise<string> {
+export default class DropBox {
+    sessionUpload(dropbox: DropboxClient, fileName: string, dir: string, log: BackItUpLogger): Promise<string> {
         return new Promise<string>(async (resolve, reject) => {
             try {
                 const chunkLength = 1000000;
@@ -65,7 +66,7 @@ class DropBox {
         });
     }
 
-    sessionStart(dropbox: DropboxClient, log: ioBroker.Logger): Promise<string> {
+    sessionStart(dropbox: DropboxClient, log: BackItUpLogger): Promise<string> {
         return new Promise<string>((resolve, reject) => {
             dropbox(
                 {
@@ -93,7 +94,7 @@ class DropBox {
         sessionId: string,
         dropbox: DropboxClient,
         getNextChunkStream: ChunkStreamFactory,
-        log: ioBroker.Logger,
+        log: BackItUpLogger,
         start: number,
         end: number,
     ): Promise<void> {
@@ -126,7 +127,7 @@ class DropBox {
     sessionFinish(
         sessionId: string,
         dropbox: DropboxClient,
-        log: ioBroker.Logger,
+        log: BackItUpLogger,
         dbxPth: string,
         fileSize: number,
     ): Promise<void> {
@@ -161,5 +162,3 @@ class DropBox {
         });
     }
 }
-
-export = DropBox;

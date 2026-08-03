@@ -3,9 +3,10 @@ import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { ensureDirSync, removeSync } from 'fs-extra';
 
-import { decompress } from '../targz';
+import { decompressAsync } from '../targz';
 import { maskSecret } from '../tools';
-import type { BackItUpRestoreCallback, BackItUpRestoreLogger, BackItUpRestoreOptions } from './types';
+import type { BackItUpContext } from '../types';
+import type { BackItUpRestoreOptions, BackItUpRestoreProps, BackItUpRestoreResultCode } from './types';
 
 /** Both are validated by the command builder below, so the empty string is part of the domain. */
 type InfluxProtocol = 'http' | 'https' | '';
@@ -47,17 +48,17 @@ interface InfluxManifest {
 /**
  * Runs the influx restore command against the unpacked dump.
  *
+ * Always resolves: the command's exit status was ignored by the caller before as well.
+ *
+ * @param ctx run context, for the logger
  * @param options connection settings; in multi mode these are re-pointed at the matching target
  * @param tmpDir directory the backup was unpacked into
- * @param log restore logger
- * @param callback reports the command exit status
  */
-function replayInfluxDB(
+async function replayInfluxDB(
+    ctx: BackItUpContext,
     options: InfluxDbRestoreOptions,
     tmpDir: string,
-    log: BackItUpRestoreLogger,
-    callback?: BackItUpRestoreCallback,
-): void {
+): Promise<void> {
     let dbName = options.dbName;
 
     if (options.influxDBMulti === true && existsSync(tmpDir)) {
@@ -81,7 +82,7 @@ function replayInfluxDB(
                 }
             });
         } catch (err) {
-            log.error(`manifest is broken: ${err}`);
+            ctx.log.error(`manifest is broken: ${err}`);
         }
 
         try {
@@ -103,7 +104,7 @@ function replayInfluxDB(
                 }
             }
         } catch (err) {
-            log.error(`InfluxDB config not found: ${err}`);
+            ctx.log.error(`InfluxDB config not found: ${err}`);
         }
     }
 
@@ -119,52 +120,49 @@ function replayInfluxDB(
         cmd = `${options.exe ? `"${options.exe}"` : 'influx'} restore --bucket ${dbName}${options.dbType === 'remote' ? ` --host ${options.protocol}://${options.host}:${options.port}` : ''} -t ${options.token} "${tmpDir}"`;
     }
 
-    if (options.deleteDatabase && options.dbType === 'local') {
-        try {
-            exec(cmdDelete, (error, stdout) => {
-                log.debug(stdout);
+    /** Runs the restore command; the exit status is logged, never reported. */
+    const runRestore = async (): Promise<void> =>
+        new Promise(resolve => {
+            // The original kept the ChildProcess in an unused `child` binding.
+            exec(cmd!, (error, _stdout, stderr) => {
+                if (error) {
+                    // The 2.x command line carries the access token and `error.message` starts with
+                    // "Command failed: <command>". The caller drops this error, so nothing leaks
+                    // today - scrubbed anyway so it stays safe if it is ever logged or reported.
+                    // See lib/scripts/12-influxDB, where it did leak.
+                    error.message = maskSecret(error.message, options.token);
+                    ctx.log.error(stderr);
+                }
+                resolve();
+            });
+        });
 
-                // The original kept the ChildProcess in an unused `child` binding.
-                exec(cmd!, (error, stdout, stderr) => {
-                    if (error) {
-                        // The 2.x command line carries the access token and `error.message` starts
-                        // with "Command failed: <command>". The caller currently drops this error,
-                        // so nothing leaks today - scrubbed anyway so it stays safe if it is ever
-                        // logged or reported. See lib/scripts/12-influxDB, where it did leak.
-                        error.message = maskSecret(error.message, options.token);
-                        log.error(stderr);
-                    }
-                    callback?.(error);
+    try {
+        if (options.deleteDatabase && options.dbType === 'local') {
+            await new Promise<void>(resolve => {
+                exec(cmdDelete, (error, stdout) => {
+                    ctx.log.debug(stdout);
+                    resolve();
                 });
             });
-        } catch (e) {
-            callback?.(e);
         }
-    } else {
-        try {
-            // The original kept the ChildProcess in an unused `child` binding.
-            exec(cmd!, (error, stdout, stderr) => {
-                if (error) {
-                    // Same scrubbing as in the branch above.
-                    error.message = maskSecret(error.message, options.token);
-                    log.error(stderr);
-                }
-                callback?.(error);
-            });
-        } catch (e) {
-            callback?.(e);
-        }
+        await runRestore();
+    } catch {
+        // `cmd` is undefined for any version other than 1.x/2.x and `exec(undefined)` throws.
+        // Swallowed here, as before.
     }
 }
 
-export function restore(
-    options: InfluxDbRestoreOptions,
-    fileName: string,
-    log: BackItUpRestoreLogger,
-    adapter: ioBroker.Adapter,
-    callback?: BackItUpRestoreCallback,
-): void {
-    let cb = callback;
+/**
+ * Unpacks an InfluxDB backup and hands it to the influx restore command.
+ *
+ * @param props the run context, the influxDB slice of the config and the archive
+ */
+export async function restore(
+    props: BackItUpRestoreProps<InfluxDbRestoreOptions>,
+): Promise<BackItUpRestoreResultCode> {
+    const { context: ctx, options, fileName } = props;
+    const adapter = ctx.adapter!;
 
     const tmpDir = join(options.backupDir, 'influxDBtmp').replace(/\\/g, '/');
 
@@ -176,7 +174,7 @@ export function restore(
     void adapter.getObjectView(
         'system',
         'instance',
-        { startkey: 'system.adapter.influxdb.', endkey: 'system.adapter.influxdb.\u9999' },
+        { startkey: 'system.adapter.influxdb.', endkey: 'system.adapter.influxdb.香' },
         (err, instances) => {
             const resultInstances: { id: string; config: unknown }[] = [];
             if (!err && instances && instances.rows) {
@@ -192,14 +190,14 @@ export function restore(
                     void adapter.getForeignObject(`system.adapter.${_id}`, (err, obj) => {
                         if (obj?.common?.enabled) {
                             void adapter.setForeignState(`system.adapter.${_id}.alive`, false);
-                            log.debug(`${_id} is stopped`);
+                            ctx.log.debug(`${_id} is stopped`);
                             enabledInstances.push(_id);
                             startAfterRestore = true;
                         }
                     });
                 }
             } else {
-                log.debug('Could not retrieve influxdb instances!');
+                ctx.log.debug('Could not retrieve influxdb instances!');
             }
         },
     );
@@ -209,85 +207,58 @@ export function restore(
 
     if (!existsSync(tmpDir)) {
         ensureDirSync(tmpDir, desiredMode as unknown as number);
-        log.debug('Created tmp directory');
+        ctx.log.debug('Created tmp directory');
     } else {
         try {
-            log.debug('Try deleting the old InfluxDB tmp directory');
+            ctx.log.debug('Try deleting the old InfluxDB tmp directory');
             removeSync(tmpDir);
             if (!existsSync(tmpDir)) {
-                log.debug('InfluxDB old tmp directory was successfully deleted');
+                ctx.log.debug('InfluxDB old tmp directory was successfully deleted');
             }
             ensureDirSync(tmpDir, desiredMode as unknown as number);
-            log.debug('Created tmp directory');
+            ctx.log.debug('Created tmp directory');
         } catch (e) {
-            log.debug(`InfluxDB old tmp directory could not be deleted: ${e}`);
+            ctx.log.debug(`InfluxDB old tmp directory could not be deleted: ${e}`);
         }
     }
-    log.debug('Start influxDB Restore ...');
+    ctx.log.debug('Start influxDB Restore ...');
 
     try {
-        decompress(
-            {
-                src: fileName,
-                dest: tmpDir,
-            },
-            // lib/targz only ever passes an error, so the `stderr` the original forwarded as the
-            // exit code was always undefined.
-            err => {
-                if (err) {
-                    log.error(err);
-                    if (cb) {
-                        log.error('influxDB Restore not completed');
-                        cb(err);
-                        cb = undefined;
-                    }
-                } else {
-                    if (cb) {
-                        // The replay error is deliberately ignored - the step always reports success.
-                        replayInfluxDB(options, tmpDir, log, () => {
-                            // Start influxDB Instances
-                            if (startAfterRestore) {
-                                enabledInstances.forEach(enabledInstance => {
-                                    void adapter.getForeignObject(
-                                        `system.adapter.${enabledInstance}`,
-                                        (err, obj) => {
-                                            if (obj && !obj.common?.enabled) {
-                                                void adapter.setForeignState(
-                                                    `system.adapter.${enabledInstance}.alive`,
-                                                    true,
-                                                );
-                                                log.debug(`${enabledInstance} started`);
-                                            }
-                                        },
-                                    );
-                                });
-                            }
-                            // delete influxDB tmpDir
-                            if (existsSync(tmpDir)) {
-                                try {
-                                    log.debug('Try deleting the InfluxDB tmp directory');
-                                    removeSync(tmpDir);
-                                    if (!existsSync(tmpDir)) {
-                                        log.debug('InfluxDB tmp directory was successfully deleted');
-                                    }
-                                } catch (e) {
-                                    log.debug(`InfluxDB tmp directory could not be deleted: ${e}`);
-                                }
-                            }
-                            log.debug('influxDB Restore completed successfully');
-                            cb?.(null, 'influxDB restore done');
-                            cb = undefined;
-                        });
-                    }
-                }
-            },
-        );
+        await decompressAsync({ src: fileName, dest: tmpDir });
     } catch (err) {
-        if (cb) {
-            cb(err);
-            cb = undefined;
+        ctx.log.error(err);
+        ctx.log.error('influxDB Restore not completed');
+        throw err;
+    }
+
+    // The replay error is deliberately ignored - the step always reports success.
+    await replayInfluxDB(ctx, options, tmpDir);
+
+    // Start influxDB Instances
+    if (startAfterRestore) {
+        enabledInstances.forEach(enabledInstance => {
+            void adapter.getForeignObject(`system.adapter.${enabledInstance}`, (err, obj) => {
+                if (obj && !obj.common?.enabled) {
+                    void adapter.setForeignState(`system.adapter.${enabledInstance}.alive`, true);
+                    ctx.log.debug(`${enabledInstance} started`);
+                }
+            });
+        });
+    }
+    // delete influxDB tmpDir
+    if (existsSync(tmpDir)) {
+        try {
+            ctx.log.debug('Try deleting the InfluxDB tmp directory');
+            removeSync(tmpDir);
+            if (!existsSync(tmpDir)) {
+                ctx.log.debug('InfluxDB tmp directory was successfully deleted');
+            }
+        } catch (e) {
+            ctx.log.debug(`InfluxDB tmp directory could not be deleted: ${e}`);
         }
     }
+    ctx.log.debug('influxDB Restore completed successfully');
+    return 'influxDB restore done';
 }
 
 export const isStop = false;

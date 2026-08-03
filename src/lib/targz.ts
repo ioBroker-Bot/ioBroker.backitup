@@ -96,3 +96,27 @@ export function decompress(opts: DecompressOptions, callback?: TargzCallback): v
             .pipe(extract(dest, tarOpts).on('error', error).on('finish', () => cb()));
     });
 }
+
+/**
+ * Promise form of {@link compress}.
+ *
+ * Note that the underlying implementation is not guarded against reporting more than once - a
+ * failure in any of the three streams calls back, and a later one calls back again. The promise
+ * absorbs the repeats: the first settle wins.
+ *
+ * @param opts what to pack and where to write it
+ */
+export async function compressAsync(opts: CompressOptions): Promise<void> {
+    return new Promise((resolve, reject) => compress(opts, err => (err ? reject(err) : resolve())));
+}
+
+/**
+ * Promise form of {@link decompress}.
+ *
+ * Same note as above: repeated reports from the stream chain are absorbed by the promise.
+ *
+ * @param opts what to unpack and where to put it
+ */
+export async function decompressAsync(opts: DecompressOptions): Promise<void> {
+    return new Promise((resolve, reject) => decompress(opts, err => (err ? reject(err) : resolve())));
+}

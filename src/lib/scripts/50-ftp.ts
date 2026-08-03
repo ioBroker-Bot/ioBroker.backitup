@@ -1,11 +1,9 @@
 import { existsSync } from 'node:fs';
 import Client from 'ftp';
 
-import type { BackItUpExecuteContext } from '../types';
-import type { BackItUpScriptCallback } from './types';
+import type { BackItUpContext, BackItUpProps } from '../types';
 
 interface FtpUploadOptions {
-    context: BackItUpExecuteContext;
     host: string;
     port?: number | string;
     user?: string;
@@ -27,201 +25,217 @@ interface FtpUploadOptions {
     ccuEvents?: unknown[];
 }
 
-type Errors = BackItUpExecuteContext['errors'];
-type Done = (error?: Error | string | null) => void;
-
-function uploadFiles(
-    client: Client,
-    dir: string,
-    fileNames: string[],
-    log: ioBroker.Logger,
-    errors: Errors,
-    callback?: Done,
-): void {
-    if (!fileNames || !fileNames.length) {
-        callback?.();
-    } else {
+/**
+ * Uploads every file of this run, one after the other.
+ *
+ * A failed upload is recorded and logged but does not stop the remaining files, exactly as the
+ * `setImmediate` recursion did.
+ *
+ * @param client connected ftp client
+ * @param dir target directory on the server
+ * @param fileNames the files to send; this list is consumed
+ * @param ctx run context, for the logger and the error store
+ */
+async function uploadFiles(client: Client, dir: string, fileNames: string[], ctx: BackItUpContext): Promise<void> {
+    while (fileNames.length) {
         let fileName = fileNames.shift() as string;
         fileName = fileName.replace(/\\/g, '/');
         const onlyFileName = fileName.split('/').pop();
 
-        log.debug(`Send ${onlyFileName}`);
+        ctx.log.debug(`Send ${onlyFileName}`);
         if (existsSync(fileName)) {
-            client.put(fileName, `${dir}/${onlyFileName}`, err => {
-                if (err) {
-                    errors.ftp = err;
-                    log.error(err as unknown as string);
-                }
-                setImmediate(uploadFiles, client, dir, fileNames, log, errors, callback);
+            await new Promise<void>(resolve => {
+                client.put(fileName, `${dir}/${onlyFileName}`, err => {
+                    if (err) {
+                        ctx.errors.ftp = err;
+                        ctx.log.error(err);
+                    }
+                    resolve();
+                });
             });
         } else {
-            log.error(`File "${fileName}" not found`);
-            setImmediate(uploadFiles, client, dir, fileNames, log, errors, callback);
+            ctx.log.error(`File "${fileName}" not found`);
         }
     }
 }
 
-function deleteFiles(client: Client, files: string[], log: ioBroker.Logger, errors: Errors, callback?: Done): void {
-    if (!files || !files.length) {
-        callback?.();
-    } else {
-        log.debug(`delete ${files[0]}`);
+/**
+ * Deletes the given files, keeping going past any that fail.
+ *
+ * @param client connected ftp client
+ * @param files absolute paths on the server; this list is consumed
+ * @param ctx run context, for the logger
+ */
+async function deleteFiles(client: Client, files: string[], ctx: BackItUpContext): Promise<void> {
+    while (files.length) {
+        ctx.log.debug(`delete ${files[0]}`);
         const file = files.shift() as string;
         try {
-            client.delete(file, err => {
-                if (err) {
-                    log.error(err as unknown as string);
-                }
-                setImmediate(deleteFiles, client, files, log, errors, callback);
+            await new Promise<void>(resolve => {
+                client.delete(file, err => {
+                    if (err) {
+                        ctx.log.error(err);
+                    }
+                    resolve();
+                });
             });
         } catch (e) {
-            log.error(e);
-            setImmediate(deleteFiles, client, files, log, errors, callback);
+            ctx.log.error(e);
         }
     }
 }
 
-function cleanFiles(
+/**
+ * Drops everything but the newest `num` backups per backup type.
+ *
+ * @param client connected ftp client
+ * @param options script options, for the multi-instance counts
+ * @param dir directory to clean
+ * @param names backup types of this run
+ * @param num how many to keep per type
+ * @param ctx run context, for the logger and the error store
+ */
+async function cleanFiles(
     client: Client,
     options: FtpUploadOptions,
     dir: string,
     names: string[],
     num: number,
-    log: ioBroker.Logger,
-    errors: Errors,
-    callback?: Done,
-): void {
+    ctx: BackItUpContext,
+): Promise<void> {
     if (!num) {
-        callback?.();
         return;
     }
-    try {
-        if (dir[dir.length - 1] !== '/') {
-            dir += '/';
-        }
-        client.list(dir, (err, result) => {
-            if (err) {
-                errors.ftp = errors.ftp || err;
-            }
-            if (names && result && result.length) {
-                const files: string[] = [];
-                names.forEach(name => {
-                    if (name) {
-                        let subResult;
 
-                        try {
-                            subResult = result.filter(a => a.name.startsWith(name));
-                        } catch (e) {
-                            log.error(`FTP error: ${e}`);
-                        }
-                        let numDel = num;
-
-                        // Multi-instance setups produce one file per configured target per run.
-                        if (name === 'influxDB' && options.influxDBMulti) {
-                            numDel = num * (options.influxDBEvents as unknown[]).length;
-                        }
-                        if (name === 'mysql' && options.mySqlMulti) {
-                            numDel = num * (options.mySqlEvents as unknown[]).length;
-                        }
-                        if (name === 'pgsql' && options.pgSqlMulti) {
-                            numDel = num * (options.pgSqlEvents as unknown[]).length;
-                        }
-                        if (name === 'homematic' && options.ccuMulti) {
-                            numDel = num * (options.ccuEvents as unknown[]).length;
-                        }
-
-                        if (subResult && subResult.length > numDel) {
-                            // delete oldest files
-                            subResult.sort((a, b) => {
-                                const at = new Date(a.date).getTime();
-                                const bt = new Date(b.date).getTime();
-                                if (at > bt) {
-                                    return -1;
-                                }
-                                if (at < bt) {
-                                    return 1;
-                                }
-                                return 0;
-                            });
-
-                            for (let i = numDel; i < subResult.length; i++) {
-                                files.push(dir + subResult[i].name);
-                            }
-                        }
-                    }
-                });
-                deleteFiles(client, files, log, errors, callback);
-            } else {
-                callback?.();
-            }
-        });
-    } catch (e) {
-        callback?.(e as Error);
+    if (dir[dir.length - 1] !== '/') {
+        dir += '/';
     }
+
+    const result = await new Promise<Client.ListingElement[]>(resolve => {
+        client.list(dir, (err, list) => {
+            if (err) {
+                ctx.errors.ftp = ctx.errors.ftp || err;
+            }
+            resolve(list);
+        });
+    });
+
+    if (!names || !result || !result.length) {
+        return;
+    }
+
+    const files: string[] = [];
+    names.forEach(name => {
+        if (name) {
+            let subResult;
+
+            try {
+                subResult = result.filter(a => a.name.startsWith(name));
+            } catch (e) {
+                ctx.log.error(`FTP error: ${e}`);
+            }
+            let numDel = num;
+
+            // Multi-instance setups produce one file per configured target per run.
+            if (name === 'influxDB' && options.influxDBMulti) {
+                numDel = num * (options.influxDBEvents as unknown[]).length;
+            }
+            if (name === 'mysql' && options.mySqlMulti) {
+                numDel = num * (options.mySqlEvents as unknown[]).length;
+            }
+            if (name === 'pgsql' && options.pgSqlMulti) {
+                numDel = num * (options.pgSqlEvents as unknown[]).length;
+            }
+            if (name === 'homematic' && options.ccuMulti) {
+                numDel = num * (options.ccuEvents as unknown[]).length;
+            }
+
+            if (subResult && subResult.length > numDel) {
+                // delete oldest files
+                subResult.sort((a, b) => {
+                    const at = new Date(a.date).getTime();
+                    const bt = new Date(b.date).getTime();
+                    if (at > bt) {
+                        return -1;
+                    }
+                    if (at < bt) {
+                        return 1;
+                    }
+                    return 0;
+                });
+
+                for (let i = numDel; i < subResult.length; i++) {
+                    files.push(dir + subResult[i].name);
+                }
+            }
+        }
+    });
+
+    await deleteFiles(client, files, ctx);
 }
 
-export function command(options: FtpUploadOptions, log: ioBroker.Logger, callback?: BackItUpScriptCallback): void {
-    if (options.host && options.context && options.context.fileNames && options.context.fileNames.length) {
-        const client = new Client();
-        const fileNames: string[] = JSON.parse(JSON.stringify(options.context.fileNames));
+/**
+ * Sends this run's archives to an FTP server and prunes the old ones.
+ *
+ * @param props the run context and the ftp slice of the config
+ */
+export async function run(props: BackItUpProps<FtpUploadOptions>): Promise<void> {
+    const { context: ctx, options } = props;
 
-        // Note: this writes back onto the shared options object.
-        if (!options.dir.startsWith('/')) {
-            options.dir = `/${options.dir}`;
-        }
+    if (!options.host || !ctx.fileNames || !ctx.fileNames.length) {
+        return;
+    }
 
-        let dir = (options.dir || '').replace(/\\/g, '/');
+    const client = new Client();
+    const fileNames: string[] = JSON.parse(JSON.stringify(ctx.fileNames));
 
-        if (!dir || dir[0] !== '/') {
-            dir = `/${dir || ''}`;
-        }
+    // Note: this writes back onto the shared options object.
+    if (!options.dir.startsWith('/')) {
+        options.dir = `/${options.dir}`;
+    }
 
-        let cb = callback;
+    let dir = (options.dir || '').replace(/\\/g, '/');
 
+    if (!dir || dir[0] !== '/') {
+        dir = `/${dir || ''}`;
+    }
+
+    await new Promise<void>((resolve, reject) => {
         client.on('ready', () => {
-            log.debug('FTP connected.');
-            uploadFiles(client, dir, fileNames, log, options.context.errors, () => {
+            void (async (): Promise<void> => {
+                ctx.log.debug('FTP connected.');
+                await uploadFiles(client, dir, fileNames, ctx);
+
                 if (options.deleteOldBackup === true) {
                     const ftpDeleteAfter =
                         options.advancedDelete === false ? options.deleteBackupAfter : options.ftpDeleteAfter;
 
-                    cleanFiles(
-                        client,
-                        options,
-                        dir,
-                        options.context.types,
-                        ftpDeleteAfter as number,
-                        log,
-                        options.context.errors,
-                        err => {
-                            if (err) {
-                                options.context.errors.ftp = options.context.errors.ftp || err;
-                            } else {
-                                options.context.done.push('ftp');
-                            }
-                            client.end();
-                            if (cb) {
-                                cb(err);
-                                cb = undefined;
-                            }
-                        },
-                    );
+                    try {
+                        await cleanFiles(client, options, dir, ctx.types, ftpDeleteAfter as number, ctx);
+                    } catch (err) {
+                        // Only a synchronous failure of the listing call gets here, as before. Note
+                        // that an upload error does not: the step is still counted as done then.
+                        ctx.errors.ftp = ctx.errors.ftp || (err as Error);
+                        client.end();
+                        reject(err as Error);
+                        return;
+                    }
+                    ctx.done.push('ftp');
+                    client.end();
+                    resolve();
                 } else {
                     client.end();
-                    if (!options.context.errors.ftp) {
-                        options.context.done.push('ftp');
+                    if (!ctx.errors.ftp) {
+                        ctx.done.push('ftp');
                     }
-                    cb?.();
+                    resolve();
                 }
-            });
+            })();
         });
 
         client.on('error', err => {
-            options.context.errors.ftp = err;
-            if (cb) {
-                cb(err);
-                cb = undefined;
-            }
+            ctx.errors.ftp = err;
+            reject(err);
         });
 
         client.connect({
@@ -235,9 +249,7 @@ export function command(options: FtpUploadOptions, log: ioBroker.Logger, callbac
             user: options.user,
             password: options.pass,
         });
-    } else {
-        callback?.();
-    }
+    });
 }
 
 export const ignoreErrors = true;

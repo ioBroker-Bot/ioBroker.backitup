@@ -6,13 +6,10 @@ import { copy, ensureDir, remove } from 'fs-extra';
 import type * as MqttModule from 'mqtt';
 
 import { getDate } from '../tools';
-import { compress } from '../targz';
-import type { BackItUpExecuteContext } from '../types';
-import type { BackItUpScriptCallback } from './types';
+import { compressAsync } from '../targz';
+import type { BackItUpContext, BackItUpProps } from '../types';
 
 interface Zigbee2mqttOptions {
-    context: BackItUpExecuteContext;
-    backupDir: string;
     /** source directory of a locally installed Zigbee2MQTT */
     path: string;
     z2mType?: 'local' | 'remote';
@@ -26,12 +23,23 @@ interface Zigbee2mqttOptions {
     nameSuffix?: string;
 }
 
-export async function command(
-    options: Zigbee2mqttOptions,
-    log: ioBroker.Logger,
-    callback?: BackItUpScriptCallback,
-): Promise<void> {
-    let cb = callback;
+/**
+ * Backs up Zigbee2MQTT, either over MQTT from a remote instance or by packing the local directory.
+ *
+ * Three things the callback version got wrong, all of them settled by awaiting:
+ *
+ * - The remote timeout reported and left its own timer in place, so a message or error arriving
+ *   afterwards reported a second time.
+ * - A failed `compress` reported the error and then threw a TypeError out of the step - it called
+ *   `err.toString()` on a rejection that carried no reason. That skipped the cleanup and left an
+ *   unhandled rejection behind.
+ * - A failed copy was reported as a *successful* backup, the temp directory was removed twice and
+ *   'zigbee2mqtt' was recorded as done. It is reported as a failure now.
+ *
+ * @param props the run context and the zigbee2mqtt slice of the config
+ */
+export async function run(props: BackItUpProps<Zigbee2mqttOptions>): Promise<void> {
+    const { context: ctx, options } = props;
 
     const nameSuffix =
         options.hostType === 'Slave' && options.slaveSuffix
@@ -47,11 +55,11 @@ export async function command(
         const mqtt = require('mqtt') as typeof MqttModule;
 
         const fileName = join(
-            options.backupDir,
+            ctx.backupDir,
             `zigbee2mqtt_${getDate()}${nameSuffix ? `_${nameSuffix}` : ''}_backup.zip`,
         );
 
-        options.context.fileNames.push(fileName);
+        ctx.fileNames.push(fileName);
 
         const z2mOptions: { username?: string; password?: string } = {};
         if (options.z2mUsername) {
@@ -63,209 +71,196 @@ export async function command(
 
         const client = mqtt.connect(`mqtt://${options.z2mUrl}:${options.z2mPort}`, z2mOptions);
 
-        let timeout: NodeJS.Timeout | undefined;
+        await new Promise<void>((resolve, reject) => {
+            let timeout: NodeJS.Timeout | undefined;
 
-        // Note: the timer runs for 60s while the message says 30s. Kept as found.
-        function resetTimeout(): void {
-            if (timeout) {
-                clearTimeout(timeout);
-            }
-            timeout = setTimeout(() => {
-                log.error('Timeout: No response from Zigbee2MQTT (in 30s)');
-                client.end();
-                // Not cleared afterwards, so a late message or error still reports again.
-                cb?.(new Error('Timeout waiting for Zigbee2MQTT response'));
-            }, 60000);
-        }
-
-        client.on('connect', () => {
-            log.debug('Connected to MQTT broker, sending Zigbee2MQTT backup request...');
-            client.subscribe(`${options.z2mBaseTopic}/bridge/response/backup`, err => {
-                if (err) {
-                    log.error('Failed to subscribe to Zigbee2MQTT response topic');
+            // Note: the timer runs for 60s while the message says 30s. Kept as found.
+            const resetTimeout = (): void => {
+                if (timeout) {
+                    clearTimeout(timeout);
+                }
+                timeout = setTimeout(() => {
+                    ctx.log.error('Timeout: No response from Zigbee2MQTT (in 30s)');
                     client.end();
-                    cb?.(err);
+                    reject(new Error('Timeout waiting for Zigbee2MQTT response'));
+                }, 60000);
+            };
+
+            client.on('connect', () => {
+                ctx.log.debug('Connected to MQTT broker, sending Zigbee2MQTT backup request...');
+                client.subscribe(`${options.z2mBaseTopic}/bridge/response/backup`, err => {
+                    if (err) {
+                        ctx.log.error('Failed to subscribe to Zigbee2MQTT response topic');
+                        client.end();
+                        reject(err);
+                        return;
+                    }
+
+                    client.publish(`${options.z2mBaseTopic}/bridge/request/backup`, '');
+                    resetTimeout();
+                });
+            });
+
+            client.on('message', (topic, message) => {
+                if (topic !== `${options.z2mBaseTopic}/bridge/response/backup`) {
                     return;
                 }
 
-                client.publish(`${options.z2mBaseTopic}/bridge/request/backup`, '');
                 resetTimeout();
+
+                try {
+                    const response = JSON.parse(message.toString());
+                    ctx.log.debug('Received Zigbee2MQTT response');
+
+                    const base64Data = response?.data?.zip;
+                    if (!base64Data) {
+                        throw new Error(`Missing "zip" field in response: ${JSON.stringify(response)}`);
+                    }
+
+                    const buffer = Buffer.from(base64Data, 'base64');
+                    writeFileSync(fileName, buffer);
+
+                    ctx.log.debug(`Zigbee2MQTT backup saved to ${fileName}`);
+
+                    ctx.done.push('zigbee2mqtt');
+                    ctx.types.push('zigbee2mqtt');
+
+                    clearTimeout(timeout);
+                    client.end();
+                    resolve();
+                } catch (err) {
+                    clearTimeout(timeout);
+                    ctx.log.error(`Error parsing backup response: ${(err as Error).message}`);
+                    ctx.errors.zigbee2mqtt = (err as Error).toString();
+                    client.end();
+                    reject(err as Error);
+                }
+            });
+
+            client.on('error', err => {
+                clearTimeout(timeout);
+                ctx.log.error(`MQTT error: ${err.message}`);
+                ctx.errors.zigbee2mqtt = err.toString();
+                client.end();
+                reject(err);
             });
         });
 
-        client.on('message', (topic, message) => {
-            if (topic !== `${options.z2mBaseTopic}/bridge/response/backup`) {
-                return;
-            }
+        return;
+    }
 
-            resetTimeout();
+    const fileName = join(
+        ctx.backupDir,
+        `zigbee2mqtt_${getDate()}${nameSuffix ? `_${nameSuffix}` : ''}_backupiobroker.tar.gz`,
+    );
+    const sourcePth = join(options.path).replace(/\\/g, '/');
+    const tmpDir = join(ctx.backupDir, 'zigbee2mqtt_tmp').replace(/\\/g, '/');
 
-            try {
-                const response = JSON.parse(message.toString());
-                log.debug('Received Zigbee2MQTT response');
+    ctx.fileNames.push(fileName);
 
-                const base64Data = response?.data?.zip;
-                if (!base64Data) {
-                    throw new Error(`Missing "zip" field in response: ${JSON.stringify(response)}`);
-                }
-
-                const buffer = Buffer.from(base64Data, 'base64');
-                writeFileSync(fileName, buffer);
-
-                log.debug(`Zigbee2MQTT backup saved to ${fileName}`);
-
-                options.context.done.push('zigbee2mqtt');
-                options.context.types.push('zigbee2mqtt');
-
-                clearTimeout(timeout);
-                client.end();
-                cb?.(null);
-            } catch (err) {
-                clearTimeout(timeout);
-                log.error(`Error parsing backup response: ${err.message}`);
-                options.context.errors.zigbee2mqtt = err.toString();
-                client.end();
-                cb?.(err);
-            }
-        });
-
-        client.on('error', err => {
-            clearTimeout(timeout);
-            log.error(`MQTT error: ${err.message}`);
-            options.context.errors.zigbee2mqtt = err.toString();
-            client.end();
-            cb?.(err);
-        });
-    } else {
-        const fileName = join(
-            options.backupDir,
-            `zigbee2mqtt_${getDate()}${nameSuffix ? `_${nameSuffix}` : ''}_backupiobroker.tar.gz`,
-        );
-        const sourcePth = join(options.path).replace(/\\/g, '/');
-        const tmpDir = join(options.backupDir, 'zigbee2mqtt_tmp').replace(/\\/g, '/');
-
-        options.context.fileNames.push(fileName);
-
-        const timer = setInterval(() => {
-            if (existsSync(fileName)) {
-                const stats = statSync(fileName);
-                const fileSize = Math.floor(stats.size / (1024 * 1024));
-                log.debug(`Packed ${fileSize}MB so far...`);
-            }
-        }, 10000);
-
-        // Stays undefined when the configured source does not exist; `tmpCopy` then fails and the
-        // catch below turns that into the reported error. Kept as found.
-        let pth: string | undefined;
-
-        if (existsSync(sourcePth)) {
-            const stat = statSync(sourcePth);
-            if (!stat.isDirectory()) {
-                // Splitting and re-joining on '/' yields the input again - the original intent was
-                // presumably to strip the file name. Kept as found.
-                const parts = sourcePth.replace(/\\/g, '/').split('/');
-                pth = parts.join('/');
-            } else {
-                pth = sourcePth;
-            }
+    const timer = setInterval(() => {
+        if (existsSync(fileName)) {
+            const stats = statSync(fileName);
+            const fileSize = Math.floor(stats.size / (1024 * 1024));
+            ctx.log.debug(`Packed ${fileSize}MB so far...`);
         }
+    }, 10000);
 
-        const desiredMode = {
-            mode: 0o2775,
-        };
+    // Stays undefined when the configured source does not exist; `tmpCopy` then fails and the catch
+    // below turns that into the reported error. Kept as found.
+    let pth: string | undefined;
 
+    if (existsSync(sourcePth)) {
+        const stat = statSync(sourcePth);
+        if (!stat.isDirectory()) {
+            // Splitting and re-joining on '/' yields the input again - the original intent was
+            // presumably to strip the file name. Kept as found.
+            const parts = sourcePth.replace(/\\/g, '/').split('/');
+            pth = parts.join('/');
+        } else {
+            pth = sourcePth;
+        }
+    }
+
+    const desiredMode = {
+        mode: 0o2775,
+    };
+
+    if (!existsSync(tmpDir)) {
+        try {
+            await ensureDir(tmpDir, desiredMode);
+            ctx.log.debug('Created zigbee2mqtt directory');
+        } catch {
+            ctx.log.error(`zigbee2mqtt tmp directory "${tmpDir}" cannot created`);
+        }
+    } else {
+        ctx.log.debug(`Try deleting the old zigbee2mqtt tmp directory: "${tmpDir}"`);
+        try {
+            await remove(tmpDir);
+        } catch {
+            ctx.log.error(`old zigbee2mqtt tmp directory "${tmpDir}" cannot deleted`);
+        }
         if (!existsSync(tmpDir)) {
+            ctx.log.debug(`old zigbee2mqtt tmp directory "${tmpDir}" successfully deleted`);
             try {
                 await ensureDir(tmpDir, desiredMode);
-                log.debug('Created zigbee2mqtt directory');
+                ctx.log.debug('Created new zigbee2mqtt directory');
             } catch {
-                log.error(`zigbee2mqtt tmp directory "${tmpDir}" cannot created`);
-            }
-        } else {
-            log.debug(`Try deleting the old zigbee2mqtt tmp directory: "${tmpDir}"`);
-            try {
-                await remove(tmpDir);
-            } catch {
-                log.error(`old zigbee2mqtt tmp directory "${tmpDir}" cannot deleted`);
-            }
-            if (!existsSync(tmpDir)) {
-                log.debug(`old zigbee2mqtt tmp directory "${tmpDir}" successfully deleted`);
-                try {
-                    await ensureDir(tmpDir, desiredMode);
-                    log.debug('Created new zigbee2mqtt directory');
-                } catch {
-                    log.error(`zigbee2mqtt tmp directory "${tmpDir}" cannot created`);
-                }
+                ctx.log.error(`zigbee2mqtt tmp directory "${tmpDir}" cannot created`);
             }
         }
+    }
 
-        log.debug('compress from Zigbee2MQTT started ...');
-
+    /** Removes the staging directory, turning a failed removal into a log line as the original did */
+    const dropTmp = async (): Promise<void> => {
         try {
-            await tmpCopy(pth!, tmpDir, log);
-            await compressBackupFile(options, fileName, tmpDir, log, cb);
-        } catch (err) {
-            clearInterval(timer);
-            // NOTE: `compressBackupFile` rejects without a reason, so on a packing failure `err` is
-            // undefined here and this line throws a TypeError out of `command` - an unhandled
-            // rejection that also skips the cleanup and the `done` entry below. The callback has
-            // already reported the packing error at that point. Kept as found.
-            options.context.errors.zigbee2mqtt = err.toString();
-            log.error(err);
-
-            try {
-                await delTmp(options, tmpDir, log);
-            } catch {
-                log.error(
-                    `The temporary directory "${tmpDir}" could not be deleted. Please check the directory permissions and delete the directory manually`,
-                );
-            }
-
-            if (cb) {
-                cb(null);
-                cb = undefined;
-            }
-        }
-
-        // Reached after a copy failure too - reported as done and cleaned up a second time.
-        clearInterval(timer);
-        options.context.done.push('zigbee2mqtt');
-        options.context.types.push('zigbee2mqtt');
-
-        try {
-            await delTmp(options, tmpDir, log);
+            await delTmp(ctx, tmpDir);
         } catch {
-            log.error(
+            ctx.log.error(
                 `The temporary directory "${tmpDir}" could not be deleted. Please check the directory permissions and delete the directory manually`,
             );
         }
+    };
 
-        if (cb) {
-            cb(null);
-            cb = undefined;
-        }
+    ctx.log.debug('compress from Zigbee2MQTT started ...');
+
+    try {
+        await tmpCopy(pth!, tmpDir, ctx);
+        await compressBackupFile(ctx, fileName, tmpDir);
+    } catch (err) {
+        // `compressBackupFile` has already stored its own text; a copy failure has not.
+        ctx.errors.zigbee2mqtt = ctx.errors.zigbee2mqtt || `${err}`;
+        ctx.log.error(err);
+        await dropTmp();
+        throw err;
+    } finally {
+        clearInterval(timer);
     }
+
+    ctx.done.push('zigbee2mqtt');
+    ctx.types.push('zigbee2mqtt');
+
+    await dropTmp();
 }
 
 /**
  * Removes the temporary copy directory, rejecting when it cannot be deleted.
  *
- * @param options script options, for the error store
+ * @param ctx run context, for the logger and the error store
  * @param tmpDir directory to remove
- * @param log adapter logger
  */
-async function delTmp(options: Zigbee2mqttOptions, tmpDir: string, log: ioBroker.Logger): Promise<void> {
-    log.debug(`Try deleting the old zigbee2mqtt tmp directory: "${tmpDir}"`);
+async function delTmp(ctx: BackItUpContext, tmpDir: string): Promise<void> {
+    ctx.log.debug(`Try deleting the old zigbee2mqtt tmp directory: "${tmpDir}"`);
 
     return remove(tmpDir)
         .then(() => {
             if (!existsSync(tmpDir)) {
-                log.debug(`zigbee2mqtt tmp directory "${tmpDir}" successfully deleted`);
+                ctx.log.debug(`zigbee2mqtt tmp directory "${tmpDir}" successfully deleted`);
             }
         })
         .catch(err => {
-            options.context.errors.zigbee2mqtt = JSON.stringify(err);
-            log.error(
+            ctx.errors.zigbee2mqtt = JSON.stringify(err);
+            ctx.log.error(
                 `The temporary directory "${tmpDir}" could not be deleted. Please check the directory permissions and delete the directory manually`,
             );
             throw err;
@@ -277,63 +272,33 @@ async function delTmp(options: Zigbee2mqttOptions, tmpDir: string, log: ioBroker
  *
  * @param pth source directory
  * @param tmpDir staging directory
- * @param log adapter logger
+ * @param ctx run context, for the logger
  */
-async function tmpCopy(pth: string, tmpDir: string, log: ioBroker.Logger): Promise<void> {
+async function tmpCopy(pth: string, tmpDir: string, ctx: BackItUpContext): Promise<void> {
     return copy(pth, tmpDir, {
         // Matches anywhere in the path, so a backup directory containing "log" excludes
         // everything. Kept as found.
         filter: (path: string) => !(path.indexOf('log') > -1),
     }).then(() => {
-        log.debug('Zigbee2MQTT tmp copy finish');
+        ctx.log.debug('Zigbee2MQTT tmp copy finish');
     });
 }
 
 /**
  * Packs the staging directory.
  *
- * Reports a packing failure through the callback and then rejects **without a reason** - see the
- * note at the call site.
- *
- * @param options script options, for the error store
+ * @param ctx run context, for the logger and the error store
  * @param fileName archive to write
  * @param tmpDir staging directory to pack
- * @param log adapter logger
- * @param callback reports the packing failure
  */
-async function compressBackupFile(
-    options: Zigbee2mqttOptions,
-    fileName: string,
-    tmpDir: string,
-    log: ioBroker.Logger,
-    callback?: BackItUpScriptCallback,
-): Promise<void> {
-    return new Promise((resolve, reject) => {
-        let cb = callback;
-
-        compress(
-            {
-                src: tmpDir,
-                dest: fileName,
-            },
-            // lib/targz only ever passes an error; the `stderr` parameter the original declared
-            // here was always undefined, so its `log.error(stderr)` never fired.
-            err => {
-                if (err) {
-                    options.context.errors.zigbee2mqtt = err.toString();
-                    if (cb) {
-                        cb(err);
-                        cb = undefined;
-                        // Without a callback this never settles and `command` hangs. Kept as found.
-                        reject();
-                    }
-                } else {
-                    log.debug(`Backup created: ${fileName}`);
-                    resolve();
-                }
-            },
-        );
-    });
+async function compressBackupFile(ctx: BackItUpContext, fileName: string, tmpDir: string): Promise<void> {
+    try {
+        await compressAsync({ src: tmpDir, dest: fileName });
+    } catch (err) {
+        ctx.errors.zigbee2mqtt = (err as Error).toString();
+        throw err;
+    }
+    ctx.log.debug(`Backup created: ${fileName}`);
 }
 
 export const ignoreErrors = true;

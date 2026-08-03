@@ -779,6 +779,60 @@ export type BackItUpExecuteContext = {
 };
 
 /**
+ * The logger a step gets.
+ *
+ * Deliberately narrower than `ioBroker.Logger`: the steps only ever call these three, and the
+ * detached restore has no adapter to log through, so it supplies a file-backed implementation.
+ * Every message is already prefixed with the step name by whoever builds the context.
+ */
+export interface BackItUpLogger {
+    debug(text: unknown): void;
+    warn(text: unknown): void;
+    error(text: unknown): void;
+}
+
+/**
+ * The handle every backup step, restore step and storage engine receives.
+ *
+ * One instance per step, but the four scratch-pad members are the *same objects* for every step of
+ * a run - that is how the steps hand results to the notification steps that run last.
+ *
+ * This replaces the four values lib/execute used to graft onto the options object
+ * (`context`, `backupDir`, `timestamp`, `adapter`). It deliberately stays a plain interface with no
+ * runtime module behind it: lib/restore is copied to the bash directory and started as its own
+ * process, where nothing else from lib/ is available, so it has to be able to build one inline.
+ *
+ * It must never be merged into the options object - lib/execute JSON-serialises that for the masked
+ * debug line, and lib/restore writes it to restore.json for the detached run.
+ */
+export interface BackItUpContext extends BackItUpExecuteContext {
+    /** null in the detached restore process, which runs without an adapter */
+    readonly adapter: ioBroker.Adapter | null;
+    /** already scoped to the running step */
+    readonly log: BackItUpLogger;
+    /** ioBroker backup directory */
+    readonly backupDir: string;
+    /** start of the run */
+    readonly timestamp: number;
+}
+
+/**
+ * The single argument every module under lib/scripts, lib/restore and lib/list is called with.
+ *
+ * One object instead of a positional list, so a new field reaches all three families without
+ * touching every call site. The restore and storage contracts extend it with what they need on top.
+ *
+ * `TOptions` is `never` in the contracts on purpose: the config slice differs per module, and
+ * parameter contravariance then lets each one declare the slice it actually reads.
+ */
+export interface BackItUpProps<TOptions = never> {
+    /** run-scoped handle: adapter, logger and the shared scratch pad */
+    readonly context: BackItUpContext;
+    /** the config slice this module was picked for */
+    readonly options: TOptions;
+}
+
+/**
  * The config main.js assembles for one backup run and hands to lib/execute.
  *
  * main.js is still plain JavaScript, so the per-task slices cannot be narrowed yet - lib/execute
@@ -787,6 +841,8 @@ export type BackItUpExecuteContext = {
 export type BackItUpExecuteConfig = Record<string, any> & {
     /** the backup type this run belongs to - `'iobroker'` or `'ccu'` */
     name: string;
+    /** "Ignore backup errors" from the instance settings; decides whether a failed step ends the run */
+    ignoreErrors: boolean;
     /** only run the steps marked `afterBackup` */
     afterBackup?: boolean;
     /** shared scratch pad, created on the first pass */

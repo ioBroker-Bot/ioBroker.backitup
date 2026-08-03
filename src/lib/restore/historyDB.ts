@@ -1,23 +1,23 @@
 import { existsSync } from 'node:fs';
 
-import { decompress } from '../targz';
-import type { BackItUpRestoreCallback, BackItUpRestoreLogger, BackItUpRestoreOptions } from './types';
+import { decompressAsync } from '../targz';
+import type { BackItUpRestoreOptions, BackItUpRestoreProps, BackItUpRestoreResultCode } from './types';
 
 interface HistoryRestoreOptions extends BackItUpRestoreOptions {
     /** directory the history data is unpacked into */
     path: string;
 }
 
-export function restore(
-    options: HistoryRestoreOptions,
-    fileName: string,
-    log: BackItUpRestoreLogger,
-    adapter: ioBroker.Adapter,
-    callback?: BackItUpRestoreCallback,
-): void {
-    let cb = callback;
+/**
+ * Unpacks a history database backup.
+ *
+ * @param props the run context, the history slice of the config and the archive
+ */
+export async function restore(props: BackItUpRestoreProps<HistoryRestoreOptions>): Promise<BackItUpRestoreResultCode> {
+    const { context: ctx, options, fileName } = props;
+    const adapter = ctx.adapter!;
 
-    log.debug('Start History Restore ...');
+    ctx.log.debug('Start History Restore ...');
 
     // stop history-Adapter before Restore
     let startAfterRestore = false;
@@ -29,7 +29,7 @@ export function restore(
         adapter.getObjectView(
             'system',
             'instance',
-            { startkey: 'system.adapter.history.', endkey: 'system.adapter.history.\u9999' },
+            { startkey: 'system.adapter.history.', endkey: 'system.adapter.history.香' },
             (err, instances) => {
                 const resultInstances: { id: string; config: unknown }[] = [];
                 if (!err && instances && instances.rows) {
@@ -45,81 +45,57 @@ export function restore(
                         void adapter.getForeignObject(`system.adapter.${_id}`, (err, obj) => {
                             if (obj?.common?.enabled) {
                                 void adapter.setForeignState(`system.adapter.${_id}.alive`, false);
-                                log.debug(`${_id} is stopped`);
+                                ctx.log.debug(`${_id} is stopped`);
                                 enabledInstances.push(_id);
                                 startAfterRestore = true;
                             }
                         });
                     }
                 } else {
-                    log.debug('Could not retrieve history instances!');
+                    ctx.log.debug('Could not retrieve history instances!');
                 }
             },
         );
     } catch {
-        log.debug('Could not retrieve history instances!');
+        ctx.log.debug('Could not retrieve history instances!');
     }
 
     // Created through the adapter but cleared with the global clearInterval below. Kept as found.
     const timer = adapter.setInterval(() => {
         if (existsSync(options.path)) {
-            log.debug('Extracting History Backup file...');
+            ctx.log.debug('Extracting History Backup file...');
         } else {
-            log.debug('Something is wrong. No file found.');
+            ctx.log.debug('Something is wrong. No file found.');
         }
     }, 10000);
 
     try {
-        decompress(
-            {
-                src: fileName,
-                dest: options.path,
-            },
-            // lib/targz only ever passes an error, so the `stderr` the original forwarded as the
-            // exit code was always undefined.
-            err => {
-                clearInterval(timer as unknown as NodeJS.Timeout);
+        await decompressAsync({ src: fileName, dest: options.path });
+    } catch (err) {
+        ctx.log.error(err);
+        ctx.log.error('History Restore not completed');
+        throw err;
+    } finally {
+        clearInterval(timer as unknown as NodeJS.Timeout);
+    }
 
-                if (err) {
-                    log.error(err);
-                    if (cb) {
-                        log.error('History Restore not completed');
-                        cb(err);
-                        cb = undefined;
+    // Start history Instances
+    if (startAfterRestore) {
+        try {
+            enabledInstances.forEach(enabledInstance => {
+                void adapter.getForeignObject(`system.adapter.${enabledInstance}`, (err, obj) => {
+                    if (obj && !obj.common?.enabled) {
+                        void adapter.setForeignState(`system.adapter.${enabledInstance}.alive`, true);
+                        ctx.log.debug(`${enabledInstance} started`);
                     }
-                } else {
-                    if (cb) {
-                        // Start history Instances
-                        if (startAfterRestore) {
-                            try {
-                                enabledInstances.forEach(enabledInstance => {
-                                    void adapter.getForeignObject(`system.adapter.${enabledInstance}`, (err, obj) => {
-                                        if (obj && !obj.common?.enabled) {
-                                            void adapter.setForeignState(
-                                                `system.adapter.${enabledInstance}.alive`,
-                                                true,
-                                            );
-                                            log.debug(`${enabledInstance} started`);
-                                        }
-                                    });
-                                });
-                            } catch {
-                                log.debug(`History instance cannot be started`);
-                            }
-                        }
-                        log.debug('History Restore completed successfully');
-                        cb(null, 'historyDB restore done');
-                        cb = undefined;
-                    }
-                }
-            },
-        );
-    } catch (e) {
-        if (cb) {
-            cb(e);
-            cb = undefined;
+                });
+            });
+        } catch {
+            ctx.log.debug(`History instance cannot be started`);
         }
     }
+    ctx.log.debug('History Restore completed successfully');
+    return 'historyDB restore done';
 }
 
 export const isStop = false;

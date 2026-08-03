@@ -2,8 +2,14 @@ import { appendFileSync, chmodSync, existsSync, mkdirSync, readdirSync, readFile
 import { join } from 'node:path';
 
 import { getIobDir, getTimeString } from './tools';
-import type { BackItUpExecuteCallback, BackItUpExecuteConfig } from './types';
-import type { BackItUpScript, BackItUpScriptCallback } from './scripts/types';
+import type {
+    BackItUpContext,
+    BackItUpExecuteCallback,
+    BackItUpExecuteConfig,
+    BackItUpLogger,
+    BackItUpProps,
+} from './types';
+import type { BackItUpScript, BackItUpStepFailure } from './scripts/types';
 
 /** The `notificationsType` value each messaging step requires */
 const NOTIFIER: Record<string, string> = {
@@ -98,6 +104,19 @@ const DEEP_SECRETS: Record<string, string[]> = {
     zigbee2mqtt: ['z2mPassword'],
 };
 
+/**
+ * How the dispatcher sees a loaded step.
+ *
+ * The authoring contract is {@link BackItUpScript}, which declares `options: never` so each step
+ * can narrow it to its own config slice. That is deliberately unusable from here, so the loader
+ * widens it once.
+ */
+interface LoadedScript {
+    run: (props: BackItUpProps<unknown>) => Promise<number | void>;
+    ignoreErrors: boolean;
+    afterBackup?: boolean;
+}
+
 let timerCleanFiles: NodeJS.Timeout | undefined;
 let tmpLog = '';
 
@@ -109,8 +128,8 @@ let tmpLog = '';
  *
  * @param callback reports a directory that cannot be read
  */
-function loadScripts(callback: BackItUpExecuteCallback): Record<string, BackItUpScript | null> {
-    const scripts: Record<string, BackItUpScript | null> = {};
+function loadScripts(callback: BackItUpExecuteCallback): Record<string, LoadedScript | null> {
+    const scripts: Record<string, LoadedScript | null> = {};
     let files;
     try {
         files = readdirSync(`${__dirname}/scripts`);
@@ -192,7 +211,7 @@ function executeScripts(
     adapter: ioBroker.Adapter,
     config: BackItUpExecuteConfig,
     callback: BackItUpExecuteCallback,
-    scripts?: Record<string, BackItUpScript | null>,
+    scripts?: Record<string, LoadedScript | null>,
     code?: number | null,
 ): void {
     if (!scripts) {
@@ -225,7 +244,7 @@ function executeScripts(
             scripts[name] &&
             (!config.afterBackup || scripts[name].afterBackup)
         ) {
-            let func: BackItUpScript | null | undefined;
+            let func: LoadedScript | null | undefined;
             // Open on purpose: the slice differs per step and main.js is still JS.
             let options: Record<string, any> | undefined;
             switch (name) {
@@ -249,7 +268,6 @@ function executeScripts(
                     options = {
                         name: config.name,
                         deleteBackupAfter: config.deleteBackupAfter,
-                        ignoreErrors: config.ignoreErrors,
                     };
                     break;
 
@@ -371,6 +389,8 @@ function executeScripts(
                     if (_options.enabled !== undefined) {
                         delete _options.enabled;
                     }
+                    // The notification steps get a deep copy of the whole config, and that carries
+                    // the scratch pad along - the steps themselves read it from the run context.
                     if (_options.context !== undefined) {
                         delete _options.context;
                     }
@@ -392,9 +412,6 @@ function executeScripts(
                         if (_options[secret] !== undefined) {
                             _options[secret] = '****';
                         }
-                    }
-                    if (_options.adapter !== undefined) {
-                        delete _options.adapter;
                     }
 
                     // One more level down: the notification steps get the whole config, so the
@@ -439,11 +456,6 @@ function executeScripts(
 
                     return;
                 }
-
-                options.context = config.context;
-                options.backupDir = config.backupDir;
-                options.timestamp = config.timestamp;
-                options.adapter = adapter;
 
                 // for delete on Multi-Backup
                 if (config.influxDB && config.influxDB.influxDBMulti) {
@@ -522,26 +534,46 @@ function executeScripts(
                         tmpLog += `[ERROR] [${name}] ${err}\n`;
                         void adapter?.setState('output.line', `[ERROR] [${name}] - ${err}`, true);
                     },
-                } as unknown as ioBroker.Logger;
+                } satisfies BackItUpLogger;
+
+                // The four run-scoped values that used to be grafted onto `options`. The scratch
+                // pad is spread in by reference, so every step of a run shares the same arrays.
+                const context: BackItUpContext = {
+                    ...config.context,
+                    adapter,
+                    log,
+                    backupDir: config.backupDir,
+                    timestamp: config.timestamp,
+                };
 
                 try {
                     // generic Error handling for all synchron errors in backup scripts
-                    // `BackItUpScript.command` declares `options: never` so each step can narrow it
-                    // to its own slice; the dispatcher is the one place that has to widen it again.
-                    const command = func.command as (
-                        options: unknown,
-                        log: ioBroker.Logger,
-                        callback: BackItUpScriptCallback,
-                    ) => void;
-                    command(options, log, (err, output, _code) => {
-                        options.adapter = null;
-
+                    /**
+                     * Reports what the step produced.
+                     *
+                     * @param err the failure, if the step reported one
+                     * @param output what to write to the debug log on success
+                     * @param _code the process exit code the step supplied, if any
+                     */
+                    const finish = (err?: Error | string | null, output?: unknown, _code?: number | null): void => {
                         if (_code !== undefined) {
                             code = _code;
                         }
                         if (err) {
-                            // The step's own `ignoreErrors` is not consulted - the config value is.
-                            if (options.ignoreErrors) {
+                            // "Ignore backup errors" from the instance settings, read from the run
+                            // config rather than from the step's slice.
+                            //
+                            // main.js only copies the flag into the storage, notification and
+                            // history slices, not into the ones that produce the backup data - so
+                            // reading `options.ignoreErrors` made the setting silently ineffective
+                            // for mysql, redis, influxDB, grafana, iobroker and the rest, which is
+                            // exactly what it is named after. Those steps used to report a failure
+                            // and a success right after, and only that second report kept the run
+                            // going far enough for 96-* to send the "backup incomplete" message.
+                            // The step's own `ignoreErrors` export is still not consulted; every
+                            // script sets it to true, which would make the setting meaningless in
+                            // the other direction.
+                            if (config.ignoreErrors) {
                                 log.error(`[IGNORED] ${err}`);
                                 timerCleanFiles = setTimeout(function () {
                                     setImmediate(executeScripts, adapter, config, callback, scripts, code);
@@ -551,12 +583,17 @@ function executeScripts(
                                 callback?.(err);
                             }
                         } else {
-                            log.debug((output || 'done') as string);
+                            log.debug(output || 'done');
                             timerCleanFiles = setTimeout(function () {
                                 setImmediate(executeScripts, adapter, config, callback, scripts, code);
                             }, 150);
                         }
-                    });
+                    };
+
+                    func.run({ context, options }).then(
+                        result => finish(null, undefined, typeof result === 'number' ? result : undefined),
+                        (e: BackItUpStepFailure) => finish(e, undefined, e?.exitCode),
+                    );
                 } catch (e) {
                     callback(
                         `error on backup process: Error when executing script "${name}": ${e} Please check the config of BackItUp and execute "iobroker fix"`,
@@ -582,4 +619,4 @@ function executeScripts(
 
 // The original guarded this with `module.parent`; nothing runs when the file is loaded directly,
 // so exporting unconditionally is equivalent.
-export = executeScripts;
+export default executeScripts;

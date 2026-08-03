@@ -2,30 +2,31 @@ import { existsSync, readdirSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { copy, ensureDir, remove } from 'fs-extra';
 
-import { decompress } from '../targz';
-import type { BackItUpRestoreCallback, BackItUpRestoreLogger, BackItUpRestoreOptions } from './types';
+import { decompressAsync } from '../targz';
+import type { BackItUpRestoreOptions, BackItUpRestoreProps, BackItUpRestoreResultCode } from './types';
 
 interface Zigbee2mqttRestoreOptions extends BackItUpRestoreOptions {
     /** the Zigbee2MQTT data directory that gets overwritten */
     path: string;
 }
 
+/**
+ * Restores the Zigbee2MQTT data directory.
+ *
+ * @param props the run context, the zigbee2mqtt slice of the config and the archive
+ */
 export async function restore(
-    options: Zigbee2mqttRestoreOptions,
-    fileName: string,
-    log: BackItUpRestoreLogger,
-    _adapter: ioBroker.Adapter,
-    callback?: BackItUpRestoreCallback,
-): Promise<void> {
-    let cb = callback;
+    props: BackItUpRestoreProps<Zigbee2mqttRestoreOptions>,
+): Promise<BackItUpRestoreResultCode> {
+    const { context: ctx, options, fileName } = props;
 
-    log.debug('Start Zigbee2MQTT Restore ...');
+    ctx.log.debug('Start Zigbee2MQTT Restore ...');
 
     const timer = setInterval(() => {
         if (existsSync(options.path)) {
-            log.debug('Extracting Zigbee2MQTT Backup file...');
+            ctx.log.debug('Extracting Zigbee2MQTT Backup file...');
         } else {
-            log.debug('Something is wrong. No file found.');
+            ctx.log.debug('Something is wrong. No file found.');
         }
     }, 10000);
 
@@ -34,85 +35,60 @@ export async function restore(
 
     try {
         await ensureDir(tmpDir);
-        log.debug(`Zigbee2MQTT tmp directory created: ${tmpDir}`);
+        ctx.log.debug(`Zigbee2MQTT tmp directory created: ${tmpDir}`);
     } catch {
-        log.debug('Zigbee2MQTT tmp directory cannot created');
+        ctx.log.debug('Zigbee2MQTT tmp directory cannot created');
     }
 
     try {
-        decompress(
-            {
-                src: fileName,
-                dest: tmpDir,
-            },
-            // lib/targz only ever passes an error, so the `stderr` the original forwarded as the
-            // exit code was always undefined.
-            async err => {
-                if (timer) {
-                    clearInterval(timer);
-                }
+        await decompressAsync({ src: fileName, dest: tmpDir });
+    } catch (err) {
+        ctx.log.error(err);
+        ctx.log.error('Zigbee2MQTT Restore not completed');
+        throw err;
+    } finally {
+        clearInterval(timer);
+    }
 
-                if (err) {
-                    log.error(err);
-                    if (cb) {
-                        log.error('Zigbee2MQTT Restore not completed');
-                        cb(err);
-                        cb = undefined;
-                    }
-                } else {
-                    if (cb) {
-                        // Restore Backup-Files
-                        if (existsSync(tmpDir) && existsSync(destPth)) {
-                            const files = readdirSync(destPth);
+    // Restore Backup-Files
+    if (!existsSync(tmpDir) || !existsSync(destPth)) {
+        ctx.log.debug('Zigbee2MQTT Restore not completed. Please check your Path Configuration.');
+        return 'Zigbee2MQTT Restore not completed';
+    }
 
-                            // NOTE: `file` is a bare name, so this deletes relative to the process
-                            // working directory rather than from `destPth` - and the callback is
-                            // async inside forEach, so nothing waits for it either. Kept as found.
-                            files.forEach(async file => {
-                                const stat = statSync(join(destPth, file));
+    const files = readdirSync(destPth);
 
-                                if (!stat.isDirectory()) {
-                                    await remove(file);
-                                }
-                            });
+    // NOTE: `file` is a bare name, so this deletes relative to the process working directory rather
+    // than from `destPth`. Kept as found - the removals are awaited now, which the original's async
+    // callback inside `forEach` never did.
+    for (const file of files) {
+        const stat = statSync(join(destPth, file));
 
-                            await copy(tmpDir, destPth, {
-                                filter: (path: string) => !path.includes('log'),
-                            })
-                                .then(async () => {
-                                    log.debug('Zigbee2MQTT copy finish');
-
-                                    log.debug('Try deleting the Zigbee2MQTT tmp directory');
-                                    await remove(tmpDir);
-
-                                    if (!existsSync(tmpDir)) {
-                                        log.debug('Zigbee2MQTT tmp directory was successfully deleted');
-                                    }
-
-                                    log.debug('Zigbee2MQTT Restore completed successfully');
-                                    cb!(null, 'Zigbee2MQTT restore done');
-                                    cb = undefined;
-                                })
-                                .catch(err => {
-                                    log.error(err);
-                                    cb?.(null, 'Zigbee2MQTT restore broken');
-                                    cb = undefined;
-                                });
-                        } else {
-                            log.debug('Zigbee2MQTT Restore not completed. Please check your Path Configuration.');
-                            cb(null, 'Zigbee2MQTT Restore not completed');
-                            cb = undefined;
-                        }
-                    }
-                }
-            },
-        );
-    } catch (e) {
-        if (cb) {
-            cb(e);
-            cb = undefined;
+        if (!stat.isDirectory()) {
+            await remove(file);
         }
     }
+
+    try {
+        await copy(tmpDir, destPth, {
+            filter: (path: string) => !path.includes('log'),
+        });
+    } catch (err) {
+        ctx.log.error(err);
+        return 'Zigbee2MQTT restore broken';
+    }
+
+    ctx.log.debug('Zigbee2MQTT copy finish');
+
+    ctx.log.debug('Try deleting the Zigbee2MQTT tmp directory');
+    await remove(tmpDir);
+
+    if (!existsSync(tmpDir)) {
+        ctx.log.debug('Zigbee2MQTT tmp directory was successfully deleted');
+    }
+
+    ctx.log.debug('Zigbee2MQTT Restore completed successfully');
+    return 'Zigbee2MQTT restore done';
 }
 
 export const isStop = false;

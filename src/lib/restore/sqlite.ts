@@ -2,8 +2,9 @@ import { exec } from 'node:child_process';
 import { existsSync, statSync, unlinkSync } from 'node:fs';
 import { join } from 'node:path';
 
-import { decompress } from '../targz';
-import type { BackItUpRestoreCallback, BackItUpRestoreLogger, BackItUpRestoreOptions } from './types';
+import { decompressAsync } from '../targz';
+import type { BackItUpContext } from '../types';
+import type { BackItUpRestoreOptions, BackItUpRestoreProps, BackItUpRestoreResultCode } from './types';
 
 interface SqliteRestoreOptions extends BackItUpRestoreOptions {
     /** the .db file that gets replaced */
@@ -15,54 +16,55 @@ interface SqliteRestoreOptions extends BackItUpRestoreOptions {
 /**
  * Deletes the old database file and feeds the dump into a fresh one.
  *
+ * Always resolves: the sqlite3 exit status was ignored by the caller before as well. A failing
+ * delete of the old database used to report through the callback *and* carry on, which ran the
+ * caller's success path a second time - it only logs now.
+ *
+ * @param ctx run context, for the logger
  * @param options sqlite settings
  * @param fileNameSQlite the unpacked .sql file
- * @param log restore logger
- * @param callback reports the sqlite3 exit status
  */
-function replaySqlite(
+async function replaySqlite(
+    ctx: BackItUpContext,
     options: SqliteRestoreOptions,
     fileNameSQlite: string,
-    log: BackItUpRestoreLogger,
-    callback?: BackItUpRestoreCallback,
-): void {
+): Promise<void> {
     if (options?.filePth && existsSync(options.filePth)) {
         try {
             unlinkSync(options.filePth);
-            log.debug('old sqlite db deleted!');
+            ctx.log.debug('old sqlite db deleted!');
         } catch (e) {
-            // Reports the failure but does not return, so the restore below runs anyway and the
-            // callback fires a second time. Kept as found.
-            log.debug(`sqlite db cannot deleted: ${e}`);
-            callback?.(e);
+            ctx.log.debug(`sqlite db cannot deleted: ${e}`);
         }
     }
 
     const cmdRestore = `${options.exe ? options.exe : 'sqlite3'} ${options.filePth} < ${fileNameSQlite}`;
 
     try {
-        exec(cmdRestore, (error, stdout, stderr) => {
-            if (error) {
-                log.error(stderr);
-            }
-            callback?.(error);
+        await new Promise<void>(resolve => {
+            exec(cmdRestore, (error, _stdout, stderr) => {
+                if (error) {
+                    ctx.log.error(stderr);
+                }
+                resolve();
+            });
         });
     } catch {
         // ignore errors
     }
 }
 
-export function restore(
-    options: SqliteRestoreOptions,
-    fileName: string,
-    log: BackItUpRestoreLogger,
-    adapter: ioBroker.Adapter,
-    callback?: BackItUpRestoreCallback,
-): void {
-    let cb = callback;
+/**
+ * Unpacks a sqlite dump and feeds it into a fresh database.
+ *
+ * @param props the run context, the sqlite slice of the config and the archive
+ */
+export async function restore(props: BackItUpRestoreProps<SqliteRestoreOptions>): Promise<BackItUpRestoreResultCode> {
+    const { context: ctx, options, fileName } = props;
+    const adapter = ctx.adapter!;
 
     const fileNameSQlite = join(options.backupDir, `sqlite_restore_backupiobroker.sql`);
-    log.debug('Start sqlite Restore ...');
+    ctx.log.debug('Start sqlite Restore ...');
 
     // stop sql-Adapter before Restore
     let startAfterRestore = false;
@@ -72,7 +74,7 @@ export function restore(
     void adapter.getObjectView(
         'system',
         'instance',
-        { startkey: 'system.adapter.sql.', endkey: 'system.adapter.sql.\u9999' },
+        { startkey: 'system.adapter.sql.', endkey: 'system.adapter.sql.香' },
         (err, instances) => {
             const resultInstances: { id: string; config: unknown }[] = [];
             if (!err && instances && instances.rows) {
@@ -88,14 +90,14 @@ export function restore(
                     void adapter.getForeignObject(`system.adapter.${_id}`, (err, obj) => {
                         if (obj?.common?.enabled) {
                             void adapter.setForeignState(`system.adapter.${_id}.alive`, false);
-                            log.debug(`${_id} is stopped`);
+                            ctx.log.debug(`${_id} is stopped`);
                             enabledInstances.push(_id);
                             startAfterRestore = true;
                         }
                     });
                 }
             } else {
-                log.debug('Could not retrieve sql instances!');
+                ctx.log.debug('Could not retrieve sql instances!');
             }
         },
     );
@@ -104,79 +106,55 @@ export function restore(
         if (existsSync(fileNameSQlite)) {
             const stats = statSync(fileNameSQlite);
             const fileSize = Math.floor(stats.size / (1024 * 1024));
-            log.debug(`Extract sqlite Backup file ${fileSize}MB so far...`);
+            ctx.log.debug(`Extract sqlite Backup file ${fileSize}MB so far...`);
         } else {
-            log.debug(`Something is wrong with "${fileNameSQlite}".`);
+            ctx.log.debug(`Something is wrong with "${fileNameSQlite}".`);
         }
     }, 10000);
 
     try {
-        decompress(
-            {
-                src: fileName,
-                dest: options.backupDir,
-                tar: {
-                    map: header => {
-                        header.name = `sqlite_restore_backupiobroker.sql`;
-                        return header;
-                    },
+        await decompressAsync({
+            src: fileName,
+            dest: options.backupDir,
+            tar: {
+                map: header => {
+                    header.name = `sqlite_restore_backupiobroker.sql`;
+                    return header;
                 },
             },
-            // lib/targz only ever passes an error, so the `stderr` the original forwarded as the
-            // exit code was always undefined.
-            err => {
-                clearInterval(timer);
-
-                if (err) {
-                    log.error(err);
-                    if (cb) {
-                        log.error('sqlite Restore not completed');
-                        cb(err);
-                        cb = undefined;
-                    }
-                } else {
-                    // The replay error is deliberately ignored - the step always reports success.
-                    replaySqlite(options, fileNameSQlite, log, () => {
-                        // Start sql Instances
-                        if (startAfterRestore) {
-                            enabledInstances.forEach(enabledInstance => {
-                                void adapter.getForeignObject(
-                                    `system.adapter.${enabledInstance}`,
-                                    (err, obj) => {
-                                        if (obj && !obj.common?.enabled) {
-                                            void adapter.setForeignState(
-                                                `system.adapter.${enabledInstance}.alive`,
-                                                true,
-                                            );
-                                            log.debug(`${enabledInstance} started`);
-                                        }
-                                    },
-                                );
-                            });
-                        }
-                        // delete sqlite file
-                        if (existsSync(fileNameSQlite)) {
-                            try {
-                                unlinkSync(fileNameSQlite);
-                            } catch {
-                                log.debug(`${fileNameSQlite} cannot deleted ...`);
-                            }
-                        }
-                        if (cb) {
-                            log.debug('sqlite Restore completed successfully');
-                            cb(null, 'sqlite restore done');
-                            cb = undefined;
-                        }
-                    });
-                }
-            },
-        );
+        });
     } catch (err) {
-        if (cb) {
-            cb(err);
-            cb = undefined;
+        ctx.log.error(err);
+        ctx.log.error('sqlite Restore not completed');
+        throw err;
+    } finally {
+        clearInterval(timer);
+    }
+
+    await replaySqlite(ctx, options, fileNameSQlite);
+
+    // Start sql Instances
+    if (startAfterRestore) {
+        enabledInstances.forEach(enabledInstance => {
+            void adapter.getForeignObject(`system.adapter.${enabledInstance}`, (err, obj) => {
+                if (obj && !obj.common?.enabled) {
+                    void adapter.setForeignState(`system.adapter.${enabledInstance}.alive`, true);
+                    ctx.log.debug(`${enabledInstance} started`);
+                }
+            });
+        });
+    }
+    // delete sqlite file
+    if (existsSync(fileNameSQlite)) {
+        try {
+            unlinkSync(fileNameSQlite);
+        } catch {
+            ctx.log.debug(`${fileNameSQlite} cannot deleted ...`);
         }
     }
+
+    ctx.log.debug('sqlite Restore completed successfully');
+    return 'sqlite restore done';
 }
 
 export const isStop = false;

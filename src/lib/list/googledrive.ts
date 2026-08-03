@@ -1,8 +1,8 @@
 import GoogleDrive from '../googleDriveLib';
-import type { BackItUpConfigStorageGoogleDrive, BackItUpStorage } from '../types';
+import type { BackItUpConfigStorageGoogleDrive } from '../types';
 import type {
-    BackItUpGetFileCallback,
-    BackItUpListCallback,
+    BackItUpGetFileProps,
+    BackItUpListProps,
     BackItUpStorageEngineResult,
     BackItUpStorageEngineResultFile,
 } from './types';
@@ -77,121 +77,133 @@ function targetDir(dir: string, ownDir: boolean, dirMinimal: string): string {
     return result;
 }
 
-export function list(
-    restoreSource: BackItUpStorage | '' | undefined,
-    options: GoogleDriveOptions,
-    types: string[],
-    _log: ioBroker.Logger,
-    callback?: BackItUpListCallback,
-): void {
+/**
+ * Lists the backups stored on Google Drive.
+ *
+ * @param props run context, storage config, requested source and backup types
+ */
+export async function list(
+    props: BackItUpListProps<GoogleDriveOptions>,
+): Promise<BackItUpStorageEngineResult | undefined> {
+    const { options, restoreSource, types } = props;
     const { accessJson, dir: gdDir, ownDir, dirMinimal, newToken } = settings(options);
 
-    if (accessJson && (!restoreSource || restoreSource === 'googledrive')) {
-        let gDrive: GoogleDrive;
-        try {
-            gDrive = new GoogleDrive(accessJson, newToken);
-
-            if (!gDrive) {
-                callback?.('No or invalid access key');
-                return;
-            }
-        } catch {
-            callback?.('No or invalid access key');
-            return;
-        }
-
-        const dir = targetDir(gdDir, ownDir, dirMinimal);
-
-        gDrive
-            .getFileOrFolderId(dir)
-            .then(id => {
-                if (!id) {
-                    // Reported an empty array here before; an empty object is what every other
-                    // engine returns and what the result type describes. Both are read with
-                    // `Object.keys()` / property access downstream, so this reads the same.
-                    callback?.(null, {}, 'googledrive');
-                    return undefined;
-                }
-
-                return gDrive.listFilesInFolder(id).then(entries => {
-                    const result = entries
-                        .map(
-                            (file): BackItUpStorageEngineResultFile => ({
-                                path: file.name as string,
-                                name: file.name as string,
-                                size: file.size as string,
-                                id,
-                            }),
-                        )
-                        .filter(
-                            file =>
-                                (types.includes(file.name.split('_')[0]) ||
-                                    types.includes(file.name.split('.')[0])) &&
-                                file.name.split('.').pop() === 'gz',
-                        );
-
-                    const files: BackItUpStorageEngineResult = {};
-                    result.forEach(file => {
-                        const type = file.name.split('_')[0];
-                        files[type] = files[type] || [];
-                        files[type].push(file);
-                    });
-                    callback?.(null, files, 'googledrive');
-                });
-            })
-            .catch(err => callback?.(err));
-    } else {
-        setImmediate(() => callback?.());
+    if (!accessJson || (restoreSource && restoreSource !== 'googledrive')) {
+        // Not configured, or another storage was asked for - nothing to file.
+        return undefined;
     }
-}
 
-export function getFile(
-    options: GoogleDriveOptions,
-    fileName: string,
-    toStoreName: string,
-    log: ioBroker.Logger,
-    callback?: BackItUpGetFileCallback,
-): void {
-    const { accessJson, dir: gdDir, ownDir, dirMinimal, newToken } = settings(options);
-
-    if (accessJson) {
-        const gDrive = new GoogleDrive(accessJson, newToken);
+    let gDrive: GoogleDrive;
+    try {
+        gDrive = new GoogleDrive(accessJson, newToken);
 
         if (!gDrive) {
-            callback?.('No or invalid access key');
-            return;
+            // eslint-disable-next-line @typescript-eslint/only-throw-error
+            throw 'No or invalid access key';
         }
-
-        const dir = targetDir(gdDir, ownDir, dirMinimal);
-
-        log.debug(`Download of "${fileName}" started`);
-        gDrive
-            .getFileOrFolderId(dir)
-            .then(folderId => {
-                if (!folderId) {
-                    callback?.('Folder not found');
-                    return undefined;
-                }
-                return gDrive.getFileOrFolderId(fileName, folderId);
-            })
-            .then(fileId => {
-                if (!fileId) {
-                    callback?.('File not found');
-                    return undefined;
-                }
-                return gDrive.readFile(fileId, toStoreName);
-            })
-            .then(() => {
-                log.debug(`Download of "${fileName}" done`);
-                callback?.();
-            })
-            .catch(err => {
-                if (err) {
-                    log.error(err);
-                }
-                callback?.(err);
-            });
-    } else {
-        setImmediate(() => callback?.('Not configured'));
+    } catch {
+        // eslint-disable-next-line @typescript-eslint/only-throw-error
+        throw 'No or invalid access key';
     }
+
+    const dir = targetDir(gdDir, ownDir, dirMinimal);
+
+    const id = await gDrive.getFileOrFolderId(dir);
+    if (!id) {
+        // Reported an empty array here before; an empty object is what every other engine returns
+        // and what the result type describes. Both are read with `Object.keys()` / property access
+        // downstream, so this reads the same.
+        return {};
+    }
+
+    const entries = await gDrive.listFilesInFolder(id);
+    const result = entries
+        .map(
+            (file): BackItUpStorageEngineResultFile => ({
+                path: file.name as string,
+                name: file.name as string,
+                size: file.size as string,
+                id,
+            }),
+        )
+        .filter(
+            file =>
+                (types.includes(file.name.split('_')[0]) || types.includes(file.name.split('.')[0])) &&
+                file.name.split('.').pop() === 'gz',
+        );
+
+    const files: BackItUpStorageEngineResult = {};
+    result.forEach(file => {
+        const type = file.name.split('_')[0];
+        files[type] = files[type] || [];
+        files[type].push(file);
+    });
+    return files;
+}
+
+/**
+ * Downloads one backup from Google Drive.
+ *
+ * NOTE: the promise chain this replaces did not stop at the first miss. A missing folder reported
+ * 'Folder not found', then handed `undefined` on so the next link reported 'File not found', and
+ * the last link reported success on top - three callbacks for one failure. Awaiting stops at the
+ * first one, which is the only report the caller ever wanted.
+ *
+ * @param props run context, storage config, the file to fetch and where to put it
+ */
+export async function getFile(props: BackItUpGetFileProps<GoogleDriveOptions>): Promise<void> {
+    const {
+        context: { log },
+        options,
+        fileName,
+        toStoreName,
+    } = props;
+
+    const { accessJson, dir: gdDir, ownDir, dirMinimal, newToken } = settings(options);
+
+    if (!accessJson) {
+        // eslint-disable-next-line @typescript-eslint/only-throw-error
+        throw 'Not configured';
+    }
+
+    const gDrive = new GoogleDrive(accessJson, newToken);
+
+    if (!gDrive) {
+        // eslint-disable-next-line @typescript-eslint/only-throw-error
+        throw 'No or invalid access key';
+    }
+
+    const dir = targetDir(gdDir, ownDir, dirMinimal);
+
+    /**
+     * Logs a genuine API failure the way the old `.catch()` on the chain did, then re-throws.
+     *
+     * The two "not found" markers below deliberately do not go through here: they were handed
+     * straight to the callback before and never produced a log line.
+     *
+     * @param err whatever the Drive client rejected with
+     */
+    const reportApiFailure = (err: unknown): never => {
+        if (err) {
+            log.error(err);
+        }
+        throw err;
+    };
+
+    log.debug(`Download of "${fileName}" started`);
+
+    const folderId = await gDrive.getFileOrFolderId(dir).catch(reportApiFailure);
+    if (!folderId) {
+        // eslint-disable-next-line @typescript-eslint/only-throw-error
+        throw 'Folder not found';
+    }
+
+    const fileId = await gDrive.getFileOrFolderId(fileName, folderId).catch(reportApiFailure);
+    if (!fileId) {
+        // eslint-disable-next-line @typescript-eslint/only-throw-error
+        throw 'File not found';
+    }
+
+    await gDrive.readFile(fileId, toStoreName).catch(reportApiFailure);
+    log.debug(`Download of "${fileName}" done`);
 }

@@ -3,13 +3,11 @@ import { join } from 'node:path';
 import { authenticate } from 'dropbox-v2-api';
 
 import Dropbox from '../dropboxLib';
-import type { BackItUpExecuteContext } from '../types';
-import type { BackItUpScriptCallback } from './types';
+import type { BackItUpContext, BackItUpProps } from '../types';
 
 type DropboxClient = ReturnType<typeof authenticate>;
 
 interface DropboxUploadOptions {
-    context: BackItUpExecuteContext;
     accessToken?: string;
     dir: string;
     deleteOldBackup?: boolean;
@@ -26,39 +24,55 @@ interface DropboxUploadOptions {
     ccuEvents?: unknown[];
 }
 
-type Errors = BackItUpExecuteContext['errors'];
-type Done = (error?: Error | string | null) => void;
-
 /** Files above this size go through a chunked upload session */
 const SINGLE_SHOT_LIMIT_MB = 100;
 
+/**
+ * Uploads every file of this run, one after the other.
+ *
+ * An empty file used to match neither the single-shot nor the session branch, and the walk simply
+ * stopped there without ever reporting - the whole backup run hung on it. It is skipped with a
+ * warning now, and the files after it are still sent.
+ *
+ * @param dbx authenticated dropbox client
+ * @param dropbox helper holding the chunked upload
+ * @param dir target directory
+ * @param fileNames the files to send; this list is consumed
+ * @param ctx run context, for the logger and the error store
+ */
 async function copyFiles(
     dbx: DropboxClient,
     dropbox: Dropbox,
     dir: string,
     fileNames: string[],
-    log: ioBroker.Logger,
-    errors: Errors,
-    callback?: Done,
+    ctx: BackItUpContext,
 ): Promise<void> {
-    if (!fileNames || !fileNames.length) {
-        callback?.();
-    } else {
+    while (fileNames.length) {
         let fileName;
         try {
             fileName = fileNames.shift() as string;
             fileName = fileName.replace(/\\/g, '/');
             const onlyFileName = fileName.split('/').pop() as string;
 
-            if (existsSync(fileName)) {
-                log.debug(`Dropbox: Copy ${onlyFileName}...`);
-                const fileSize = statSync(fileName).size;
+            if (!existsSync(fileName)) {
+                ctx.log.error(`Dropbox: File "${fileName}" not found`);
+                continue;
+            }
 
-                if (fileSize && Math.round((fileSize / (1024 * 1024)) * 10) / 10 <= SINGLE_SHOT_LIMIT_MB) {
-                    const readStream = createReadStream(fileName);
-                    readStream.on('error', err => {
-                        log.error(`readStream Dropbox: ${err}`);
-                    });
+            ctx.log.debug(`Dropbox: Copy ${onlyFileName}...`);
+            const fileSize = statSync(fileName).size;
+
+            if (!fileSize) {
+                ctx.log.warn(`Dropbox: File "${fileName}" is empty and was not sent`);
+                continue;
+            }
+
+            if (Math.round((fileSize / (1024 * 1024)) * 10) / 10 <= SINGLE_SHOT_LIMIT_MB) {
+                const readStream = createReadStream(fileName);
+                readStream.on('error', err => {
+                    ctx.log.error(`readStream Dropbox: ${err}`);
+                });
+                await new Promise<void>(resolve => {
                     dbx(
                         {
                             resource: 'files/upload',
@@ -70,89 +84,91 @@ async function copyFiles(
                         err => {
                             try {
                                 if (err) {
-                                    errors.dropbox = JSON.stringify(err);
-                                    log.error(`upload Dropbox: ${JSON.stringify(err)}`);
+                                    ctx.errors.dropbox = JSON.stringify(err);
+                                    ctx.log.error(`upload Dropbox: ${JSON.stringify(err)}`);
                                 }
-                                setImmediate(copyFiles, dbx, dropbox, dir, fileNames, log, errors, callback);
                             } catch (e) {
-                                errors.dropbox = e as Error;
-                                log.error(`Dropbox callback error: ${JSON.stringify(e)}`);
-                                setImmediate(copyFiles, dbx, dropbox, dir, fileNames, log, errors, callback);
+                                ctx.errors.dropbox = e as Error;
+                                ctx.log.error(`Dropbox callback error: ${JSON.stringify(e)}`);
                             }
+                            resolve();
                         },
                     );
-                } else if (fileSize && Math.round((fileSize / (1024 * 1024)) * 10) / 10 > SINGLE_SHOT_LIMIT_MB) {
-                    try {
-                        await dropbox.sessionUpload(dbx, fileName, dir, log);
-                    } catch (e) {
-                        errors.dropbox = e as Error;
-                        log.error(`Dropbox sessionUpload: ${JSON.stringify(e)}`);
-                    }
-                    setImmediate(copyFiles, dbx, dropbox, dir, fileNames, log, errors, callback);
-                }
-                // Note: a zero-byte file matches neither branch, so the walk stops there.
+                });
             } else {
-                log.error(`Dropbox: File "${fileName}" not found`);
-                setImmediate(copyFiles, dbx, dropbox, dir, fileNames, log, errors, callback);
+                try {
+                    await dropbox.sessionUpload(dbx, fileName, dir, ctx.log);
+                } catch (e) {
+                    ctx.errors.dropbox = e as Error;
+                    ctx.log.error(`Dropbox sessionUpload: ${JSON.stringify(e)}`);
+                }
             }
         } catch (e) {
-            errors.dropbox = e as Error;
-            log.error(`Dropbox: ${JSON.stringify(e)}`);
-            setImmediate(copyFiles, dbx, dropbox, dir, fileNames, log, errors, callback);
+            ctx.errors.dropbox = e as Error;
+            ctx.log.error(`Dropbox: ${JSON.stringify(e)}`);
         }
     }
 }
 
-function deleteFiles(
-    dbx: DropboxClient,
-    files: string[],
-    log: ioBroker.Logger,
-    errors: Errors,
-    callback?: Done,
-): void {
-    if (!files || !files.length) {
-        callback?.();
-    } else {
-        log.debug(`Dropbox: delete ${files[0]}`);
+/**
+ * Deletes the given files, keeping going past any that fail.
+ *
+ * A client that threw synchronously used to report completion and then carry on walking the list,
+ * so the step reported twice. It only logs now.
+ *
+ * @param dbx authenticated dropbox client
+ * @param files paths to delete; this list is consumed
+ * @param ctx run context, for the logger
+ */
+async function deleteFiles(dbx: DropboxClient, files: string[], ctx: BackItUpContext): Promise<void> {
+    while (files.length) {
+        ctx.log.debug(`Dropbox: delete ${files[0]}`);
         try {
-            dbx(
-                {
-                    resource: 'files/delete',
-                    parameters: {
-                        path: files.shift(),
+            await new Promise<void>(resolve => {
+                dbx(
+                    {
+                        resource: 'files/delete',
+                        parameters: {
+                            path: files.shift(),
+                        },
                     },
-                },
-                err => {
-                    if (err) {
-                        log.error(`Dropbox: ${JSON.stringify(err)}`);
-                    }
-                    setImmediate(deleteFiles, dbx, files, log, errors, callback);
-                },
-            );
+                    err => {
+                        if (err) {
+                            ctx.log.error(`Dropbox: ${JSON.stringify(err)}`);
+                        }
+                        resolve();
+                    },
+                );
+            });
         } catch (e) {
-            log.error(`Dropbox: ${JSON.stringify(e)}`);
-            // Reports completion and then keeps walking the list - kept as found.
-            callback?.();
-            setImmediate(deleteFiles, dbx, files, log, errors, callback);
+            ctx.log.error(`Dropbox: ${JSON.stringify(e)}`);
         }
     }
 }
 
-function cleanFiles(
+/**
+ * Drops everything but the newest `num` backups per backup type.
+ *
+ * @param dbx authenticated dropbox client
+ * @param options script options, for the multi-instance counts
+ * @param dir directory to clean
+ * @param names backup types of this run
+ * @param num how many to keep per type
+ * @param ctx run context, for the logger
+ */
+async function cleanFiles(
     dbx: DropboxClient,
     options: DropboxUploadOptions,
     dir: string,
     names: string[],
     num: number,
-    log: ioBroker.Logger,
-    errors: Errors,
-    callback?: Done,
-): void {
+    ctx: BackItUpContext,
+): Promise<void> {
     if (!num) {
-        callback?.();
         return;
     }
-    try {
+
+    const result = await new Promise<any>(resolve => {
         dbx(
             {
                 resource: 'files/list_folder',
@@ -160,116 +176,104 @@ function cleanFiles(
                     path: dir.replace(/^\/$/, ''),
                 },
             },
-            (err, result) => {
+            (err, list) => {
                 if (err) {
-                    log.error(`Dropbox: ${JSON.stringify(err)}`);
+                    ctx.log.error(`Dropbox: ${JSON.stringify(err)}`);
                 }
-
-                if (result && result.entries) {
-                    const files: string[] = [];
-                    names.forEach(name => {
-                        const subResult = (result.entries as any[]).filter((a: any) => a.name.startsWith(name));
-                        let numDel = num;
-
-                        // Multi-instance setups produce one file per configured target per run.
-                        if (name === 'influxDB' && options.influxDBMulti) {
-                            numDel = num * (options.influxDBEvents as unknown[]).length;
-                        }
-                        if (name === 'mysql' && options.mySqlMulti) {
-                            numDel = num * (options.mySqlEvents as unknown[]).length;
-                        }
-                        if (name === 'pgsql' && options.pgSqlMulti) {
-                            numDel = num * (options.pgSqlEvents as unknown[]).length;
-                        }
-                        if (name === 'homematic' && options.ccuMulti) {
-                            numDel = num * (options.ccuEvents as unknown[]).length;
-                        }
-
-                        if (subResult.length > numDel) {
-                            // delete oldest files
-                            subResult.sort((a: any, b: any) => {
-                                const at = new Date(a.client_modified).getTime();
-                                const bt = new Date(b.client_modified).getTime();
-                                if (at > bt) {
-                                    return -1;
-                                }
-                                if (at < bt) {
-                                    return 1;
-                                }
-                                return 0;
-                            });
-
-                            for (let i = numDel; i < subResult.length; i++) {
-                                files.push(subResult[i].path_display);
-                            }
-                        }
-                    });
-                    deleteFiles(dbx, files, log, errors, callback);
-                } else {
-                    callback?.();
-                }
+                resolve(list);
             },
         );
-    } catch (e) {
-        callback?.(e as Error);
+    });
+
+    if (!result || !result.entries) {
+        return;
     }
+
+    const files: string[] = [];
+    names.forEach(name => {
+        const subResult = (result.entries as any[]).filter((a: any) => a.name.startsWith(name));
+        let numDel = num;
+
+        // Multi-instance setups produce one file per configured target per run.
+        if (name === 'influxDB' && options.influxDBMulti) {
+            numDel = num * (options.influxDBEvents as unknown[]).length;
+        }
+        if (name === 'mysql' && options.mySqlMulti) {
+            numDel = num * (options.mySqlEvents as unknown[]).length;
+        }
+        if (name === 'pgsql' && options.pgSqlMulti) {
+            numDel = num * (options.pgSqlEvents as unknown[]).length;
+        }
+        if (name === 'homematic' && options.ccuMulti) {
+            numDel = num * (options.ccuEvents as unknown[]).length;
+        }
+
+        if (subResult.length > numDel) {
+            // delete oldest files
+            subResult.sort((a: any, b: any) => {
+                const at = new Date(a.client_modified).getTime();
+                const bt = new Date(b.client_modified).getTime();
+                if (at > bt) {
+                    return -1;
+                }
+                if (at < bt) {
+                    return 1;
+                }
+                return 0;
+            });
+
+            for (let i = numDel; i < subResult.length; i++) {
+                files.push(subResult[i].path_display);
+            }
+        }
+    });
+
+    await deleteFiles(dbx, files, ctx);
 }
 
-export async function command(
-    options: DropboxUploadOptions,
-    log: ioBroker.Logger,
-    callback?: BackItUpScriptCallback,
-): Promise<void> {
+/**
+ * Sends this run's archives to Dropbox and prunes the old ones.
+ *
+ * @param props the run context and the dropbox slice of the config
+ */
+export async function run(props: BackItUpProps<DropboxUploadOptions>): Promise<void> {
+    const { context: ctx, options } = props;
+
     const dropbox = new Dropbox();
 
     // Token refresh
     const db_accessToken = options.accessToken || '';
 
-    if (db_accessToken && options.context.fileNames.length) {
-        const fileNames: string[] = JSON.parse(JSON.stringify(options.context.fileNames));
-        const dbx = authenticate({ token: db_accessToken });
+    if (!db_accessToken || !ctx.fileNames.length) {
+        return;
+    }
 
-        let dir = (options.dir || '').replace(/\\/g, '/');
+    const fileNames: string[] = JSON.parse(JSON.stringify(ctx.fileNames));
+    const dbx = authenticate({ token: db_accessToken });
 
-        if (!dir || dir[0] !== '/') {
-            dir = `/${dir || ''}`;
+    let dir = (options.dir || '').replace(/\\/g, '/');
+
+    if (!dir || dir[0] !== '/') {
+        dir = `/${dir || ''}`;
+    }
+
+    await copyFiles(dbx, dropbox, dir, fileNames, ctx);
+
+    if (options.deleteOldBackup === true) {
+        const dropboxDeleteAfter =
+            options.advancedDelete === false ? options.deleteBackupAfter : options.dropboxDeleteAfter;
+
+        try {
+            await cleanFiles(dbx, options, dir, ctx.types, dropboxDeleteAfter as number, ctx);
+        } catch (cleanErr) {
+            // Only a synchronous failure of the listing call gets here, as before.
+            ctx.errors.dropbox = ctx.errors.dropbox || (cleanErr as Error);
+            throw cleanErr;
         }
+    }
 
-        void copyFiles(dbx, dropbox, dir, fileNames, log, options.context.errors, err => {
-            if (err) {
-                options.context.errors.dropbox = err;
-                log.error(`Dropbox: ${JSON.stringify(err)}`);
-            }
-            if (options.deleteOldBackup === true) {
-                const dropboxDeleteAfter =
-                    options.advancedDelete === false ? options.deleteBackupAfter : options.dropboxDeleteAfter;
-
-                cleanFiles(
-                    dbx,
-                    options,
-                    dir,
-                    options.context.types,
-                    dropboxDeleteAfter as number,
-                    log,
-                    options.context.errors,
-                    cleanErr => {
-                        if (cleanErr) {
-                            options.context.errors.dropbox = options.context.errors.dropbox || cleanErr;
-                        } else if (!options.context.errors.dropbox) {
-                            options.context.done.push('dropbox');
-                        }
-                        callback?.(cleanErr);
-                    },
-                );
-            } else {
-                if (!options.context.errors.dropbox) {
-                    options.context.done.push('dropbox');
-                }
-                callback?.(err);
-            }
-        });
-    } else {
-        callback?.();
+    if (!ctx.errors.dropbox) {
+        ctx.done.push('dropbox');
     }
 }
 

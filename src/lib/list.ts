@@ -2,12 +2,14 @@ import { existsSync, readdirSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { getIobDir } from './tools';
-import type { BackItUpStorage } from './types';
+import type { BackItUpContext, BackItUpStorage } from './types';
 import type {
+    BackItUpListCallback,
     BackItUpListResult,
     BackItUpStorageEngine,
     BackItUpStorageEngineResultFile,
     BackItUpStorageFiles,
+    BackItUpStorageKey,
 } from './list/types';
 
 const storages: Record<string, BackItUpStorageEngine> = {};
@@ -25,13 +27,26 @@ function isNode(value: unknown): value is ConfigNode {
     return typeof value === 'object' && value !== null;
 }
 
-function listBackups(
+export default function listBackups(
     restoreSource: BackItUpStorage | '' | undefined,
     config: Record<string, unknown>,
     log: ioBroker.Logger,
     callback?: (result: BackItUpListResult) => void,
 ): void {
     const files: BackItUpStorageFiles = {};
+
+    // Listing is read-only, so the engines only ever reach for `log` here. The scratch pad and the
+    // adapter stay empty until lib/list itself is called with a real context.
+    const context: BackItUpContext = {
+        adapter: null,
+        log,
+        backupDir: join(getIobDir(), 'backups').replace(/\\/g, '/'),
+        timestamp: 0,
+        fileNames: [],
+        errors: {},
+        done: [],
+        types: [],
+    };
 
     let counter = 0;
     const creators: string[] = [];
@@ -123,7 +138,7 @@ function listBackups(
             }
 
             counter++;
-            storages[attr].list(restoreSource, storageConfig as never, creators, log, (err, result, storage) => {
+            const onListed: BackItUpListCallback = (err, result, storage) => {
                 if (err) {
                     log.error(String(err));
                 }
@@ -155,7 +170,27 @@ function listBackups(
                         callback({ error: err, data: files });
                     }
                 }, 2000);
-            });
+            };
+
+            const engine = storages[attr];
+            engine
+                .list({
+                    context,
+                    options: storageConfig as never,
+                    restoreSource,
+                    types: creators,
+                })
+                .then(
+                    // undefined means the engine had nothing to file; anything else is filed under
+                    // its own key, exactly like the callback contract did.
+                    result =>
+                        onListed(
+                            null,
+                            result,
+                            result === undefined ? undefined : (engine.storageKey ?? (attr as BackItUpStorageKey)),
+                        ),
+                    (e: Error) => onListed(e),
+                );
         }
     }
 
@@ -163,5 +198,3 @@ function listBackups(
         callback?.({ error: null, data: files });
     }
 }
-
-export = listBackups;

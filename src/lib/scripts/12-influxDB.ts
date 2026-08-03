@@ -4,9 +4,8 @@ import { join } from 'node:path';
 import { ensureDir, remove } from 'fs-extra';
 
 import { getDate, maskSecret } from '../tools';
-import { compress } from '../targz';
-import type { BackItUpExecuteContext } from '../types';
-import type { BackItUpScriptCallback } from './types';
+import { compressAsync } from '../targz';
+import type { BackItUpContext, BackItUpProps } from '../types';
 
 /** Both are validated below, so the empty string is part of the domain. */
 type InfluxProtocol = 'http' | 'https' | '';
@@ -23,8 +22,6 @@ interface InfluxDbEvent {
 }
 
 interface InfluxDbOptions {
-    context: BackItUpExecuteContext;
-    backupDir: string;
     host: string;
     port: number | string;
     dbName: string;
@@ -41,11 +38,29 @@ interface InfluxDbOptions {
     nameSuffix?: string;
 }
 
-export async function command(
-    options: InfluxDbOptions,
-    log: ioBroker.Logger,
-    callback?: BackItUpScriptCallback,
-): Promise<void> {
+/**
+ * Dumps the configured InfluxDB bucket(s)/database(s) and packs each dump.
+ *
+ * As in 30-mysql the callback version reported a dump failure from `startBackup` and then reported
+ * success again from here, and lib/execute scheduled all remaining backup steps twice as a result.
+ * Awaiting collapses that to a single report.
+ *
+ * @param props the run context and the influxDB slice of the config
+ */
+export async function run(props: BackItUpProps<InfluxDbOptions>): Promise<void> {
+    const { context: ctx, options } = props;
+
+    // A failed target no longer stops the others, as before; the first failure is reported once
+    // every target has been attempted.
+    let firstError: Error | undefined;
+    const attempt = async (): Promise<void> => {
+        try {
+            await startBackup(ctx, options);
+        } catch (err) {
+            firstError ??= err as Error;
+        }
+    };
+
     if (options.influxDBMulti) {
         // The per-event settings are written onto `options` itself, one target after another.
         for (let i = 0; i < options.influxDBEvents.length; i++) {
@@ -57,201 +72,173 @@ export async function command(
             options.dbversion = options.influxDBEvents[i].dbversion ? options.influxDBEvents[i].dbversion : '';
             options.protocol = options.influxDBEvents[i].protocol ? options.influxDBEvents[i].protocol : '';
 
-            log.debug(`InfluxDB-Backup for ${options.nameSuffix} is started ...`);
-            await startBackup(options, log, callback);
-            log.debug(`InfluxDB-Backup for ${options.nameSuffix} is finish`);
+            ctx.log.debug(`InfluxDB-Backup for ${options.nameSuffix} is started ...`);
+            await attempt();
+            ctx.log.debug(`InfluxDB-Backup for ${options.nameSuffix} is finish`);
         }
 
         // Reported as done even when a target failed - kept as found.
-        options.context.done.push('influxDB');
-        options.context.types.push('influxDB');
+        ctx.done.push('influxDB');
+        ctx.types.push('influxDB');
+    } else {
+        ctx.log.debug('InfluxDB-Backup started ...');
+        await attempt();
+        ctx.log.debug('InfluxDB-Backup for is finish');
 
-        callback?.(null);
-        return;
-    } else if (!options.influxDBMulti) {
-        log.debug('InfluxDB-Backup started ...');
-        await startBackup(options, log, callback);
-        log.debug('InfluxDB-Backup for is finish');
+        ctx.done.push('influxDB');
+        ctx.types.push('influxDB');
+    }
 
-        options.context.done.push('influxDB');
-        options.context.types.push('influxDB');
-
-        callback?.(null);
-        return;
+    if (firstError) {
+        throw firstError;
     }
 }
 
 /**
  * Dumps one bucket/database and packs the result.
  *
- * As in 30-mysql the callback parameter is deliberately local: clearing it here never reached
- * `command`, so a failure is reported once from here and then again as a success from `command`.
- *
+ * @param ctx run context
  * @param options script options, already pointed at the target to dump
- * @param log adapter logger
- * @param callback reports a dump or packing failure
  */
-async function startBackup(
-    options: InfluxDbOptions,
-    log: ioBroker.Logger,
-    callback?: BackItUpScriptCallback,
-): Promise<void> {
-    return new Promise(resolve => {
-        void (async (): Promise<void> => {
-            let localCallback = callback;
+async function startBackup(ctx: BackItUpContext, options: InfluxDbOptions): Promise<void> {
+    let nameSuffix;
+    if (options.hostType === 'Slave' && !options.influxDBMulti) {
+        nameSuffix = options.slaveSuffix ? options.slaveSuffix : '';
+    } else {
+        nameSuffix = options.nameSuffix ? options.nameSuffix : '';
+    }
+    const fileName = join(
+        ctx.backupDir,
+        `influxDB_${getDate()}${nameSuffix ? `_${nameSuffix}` : ''}_backupiobroker.tar.gz`,
+    );
+    const tmpDir = join(ctx.backupDir, `influxDB_${getDate()}${nameSuffix ? `_${nameSuffix}` : ''}_backupiobroker`);
 
-            let nameSuffix;
-            if (options.hostType === 'Slave' && !options.influxDBMulti) {
-                nameSuffix = options.slaveSuffix ? options.slaveSuffix : '';
-            } else {
-                nameSuffix = options.nameSuffix ? options.nameSuffix : '';
-            }
-            const fileName = join(
-                options.backupDir,
-                `influxDB_${getDate()}${nameSuffix ? `_${nameSuffix}` : ''}_backupiobroker.tar.gz`,
+    ctx.fileNames.push(fileName);
+
+    ctx.log.debug('Start InfluxDB Backup ...');
+
+    const desiredMode = {
+        mode: 0o2775,
+    };
+
+    if (!existsSync(tmpDir)) {
+        try {
+            await ensureDir(tmpDir, desiredMode);
+        } catch {
+            ctx.log.warn('InfluxDB Backup tmp directory cannot created ');
+        }
+        ctx.log.debug('InfluxDB Backup tmp directory created ');
+    }
+
+    // NOTE: the 2.x variant puts the access token straight into the command line, so
+    // `error.toString()` of a failed run starts with "Command failed: <command>" and carries the
+    // token. It is scrubbed before it reaches `context.errors.influxDB`, the same way 30-mysql and
+    // 30-pgsql scrub their passwords - the notification channels print that value verbatim.
+    let influxDBCMD;
+
+    if (options.dbversion === '2.x') {
+        influxDBCMD = `${options.exe ? `"${options.exe}"` : 'influx'} backup --bucket ${options.dbName}${options.dbType === 'remote' ? ` --host ${options.protocol}://${options.host}:${options.port}${options.protocol === 'https' ? ' --skip-verify' : ''}` : ''} -t ${options.token} "${tmpDir}"`;
+    } else {
+        influxDBCMD = `${options.exe ? `"${options.exe}"` : 'influxd'} backup -portable -database ${options.dbName}${options.dbType === 'remote' ? ` -host ${options.host}:${options.port}` : ''} "${tmpDir}"`;
+    }
+
+    if (
+        !(
+            ((options.dbversion === '2.x' && options.token !== '' && options.dbName !== '') ||
+                (options.dbversion === '1.x' && options.dbName !== '')) &&
+            ((options.dbType === 'remote' && options.protocol !== '' && options.host !== '') ||
+                options.dbType === 'local')
+        )
+    ) {
+        // Logged, but the caller still counts the step as done afterwards - kept as found.
+        ctx.log.error('Please check the Config from InfluxDB');
+        return;
+    }
+
+    /** Removes the temp directory, turning a failed removal into a log line as the original did. */
+    const dropTmp = async (): Promise<void> => {
+        try {
+            await delTmp(ctx, tmpDir);
+        } catch {
+            ctx.log.error(
+                `The temporary directory "${tmpDir}" could not be deleted. Please check the directory permissions and delete the directory manually`,
             );
-            const tmpDir = join(
-                options.backupDir,
-                `influxDB_${getDate()}${nameSuffix ? `_${nameSuffix}` : ''}_backupiobroker`,
-            );
+        }
+    };
 
-            options.context.fileNames.push(fileName);
-
-            log.debug('Start InfluxDB Backup ...');
-
-            const desiredMode = {
-                mode: 0o2775,
-            };
-
-            if (!existsSync(tmpDir)) {
-                try {
-                    await ensureDir(tmpDir, desiredMode);
-                } catch {
-                    log.warn('InfluxDB Backup tmp directory cannot created ');
+    let stdout = '';
+    try {
+        await new Promise<void>((resolve, reject) => {
+            exec(influxDBCMD, { maxBuffer: 10 * 1024 * 1024 }, (error, out) => {
+                stdout = out;
+                if (error) {
+                    // Scrubbed on the message itself, not just where it is stored: the same error
+                    // is what the step reports, and lib/execute puts that into the adapter log, the
+                    // output.line state and the backup history file.
+                    error.message = maskSecret(error.message, options.token);
+                    // `ExecException` is declared as Omit<ErrnoException, 'code'>, which drops the
+                    // nominal Error identity; binding it back keeps toString() identical.
+                    const failure: Error = error;
+                    ctx.errors.influxDB = failure.toString();
+                    reject(failure);
+                } else {
+                    resolve();
                 }
-                log.debug('InfluxDB Backup tmp directory created ');
-            }
+            });
+        });
+    } catch (err) {
+        if (existsSync(tmpDir)) {
+            await dropTmp();
+        }
+        ctx.log.debug(stdout);
+        // The `stderr` the original passed as a second callback argument is dropped; the masked
+        // error message says the same and cannot leak the token.
+        throw err;
+    }
 
-            // NOTE: the 2.x variant puts the access token straight into the command line, so
-            // `error.toString()` of a failed run starts with "Command failed: <command>" and
-            // carries the token. It is scrubbed before it reaches `context.errors.influxDB`, the
-            // same way 30-mysql and 30-pgsql scrub their passwords - the notification channels
-            // print that value verbatim.
-            let influxDBCMD;
+    const timer = setInterval(() => {
+        if (existsSync(fileName)) {
+            const stats = statSync(fileName);
+            const fileSize = Math.floor(stats.size / (1024 * 1024));
+            ctx.log.debug(`Packed ${fileSize}MB so far...`);
+        }
+    }, 10000);
 
-            if (options.dbversion === '2.x') {
-                influxDBCMD = `${options.exe ? `"${options.exe}"` : 'influx'} backup --bucket ${options.dbName}${options.dbType === 'remote' ? ` --host ${options.protocol}://${options.host}:${options.port}${options.protocol === 'https' ? ' --skip-verify' : ''}` : ''} -t ${options.token} "${tmpDir}"`;
-            } else {
-                influxDBCMD = `${options.exe ? `"${options.exe}"` : 'influxd'} backup -portable -database ${options.dbName}${options.dbType === 'remote' ? ` -host ${options.host}:${options.port}` : ''} "${tmpDir}"`;
-            }
+    try {
+        await compressAsync({ src: tmpDir, dest: fileName });
+    } catch (err) {
+        ctx.errors.influxDB = (err as Error).toString();
+        await dropTmp();
+        throw err;
+    } finally {
+        clearInterval(timer);
+    }
 
-            if (
-                ((options.dbversion === '2.x' && options.token !== '' && options.dbName !== '') ||
-                    (options.dbversion === '1.x' && options.dbName !== '')) &&
-                ((options.dbType === 'remote' && options.protocol !== '' && options.host !== '') ||
-                    options.dbType === 'local')
-            ) {
-                exec(influxDBCMD, { maxBuffer: 10 * 1024 * 1024 }, async (error, stdout, stderr) => {
-                    if (error) {
-                        // Scrubbed on the message itself, not just where it is stored: the same
-                        // error is handed to the callback below, and lib/execute puts that into the
-                        // adapter log, the output.line state and the backup history file.
-                        error.message = maskSecret(error.message, options.token);
-                        // `ExecException` is declared as Omit<ErrnoException, 'code'>, which drops
-                        // the nominal Error identity; binding it back keeps toString() identical.
-                        const failure: Error = error;
-                        options.context.errors.influxDB = failure.toString();
-                        if (existsSync(tmpDir)) {
-                            try {
-                                await delTmp(options, tmpDir, log);
-                            } catch {
-                                log.error(
-                                    `The temporary directory "${tmpDir}" could not be deleted. Please check the directory permissions and delete the directory manually`,
-                                );
-                            }
-                        }
-                        log.debug(stdout);
-                        localCallback?.(error, stderr);
-                        localCallback = undefined;
-                        resolve();
-                    } else {
-                        const timer = setInterval(() => {
-                            if (existsSync(fileName)) {
-                                const stats = statSync(fileName);
-                                const fileSize = Math.floor(stats.size / (1024 * 1024));
-                                log.debug(`Packed ${fileSize}MB so far...`);
-                            }
-                        }, 10000);
+    ctx.log.debug(`Backup created: ${fileName}`);
 
-                        compress(
-                            {
-                                src: tmpDir,
-                                dest: fileName,
-                            },
-                            // lib/targz only ever passes an error; the stdout/stderr parameters the
-                            // original declared here were always undefined.
-                            async err => {
-                                clearInterval(timer);
-                                if (err) {
-                                    options.context.errors.influxDB = err.toString();
-                                    try {
-                                        await delTmp(options, tmpDir, log);
-                                    } catch {
-                                        log.error(
-                                            `The temporary directory "${tmpDir}" could not be deleted. Please check the directory permissions and delete the directory manually`,
-                                        );
-                                    }
-
-                                    if (localCallback) {
-                                        localCallback(err);
-                                        localCallback = undefined;
-                                    }
-                                    resolve();
-                                } else {
-                                    log.debug(`Backup created: ${fileName}`);
-
-                                    if (existsSync(tmpDir)) {
-                                        try {
-                                            await delTmp(options, tmpDir, log);
-                                        } catch {
-                                            log.error(
-                                                `The temporary directory "${tmpDir}" could not be deleted. Please check the directory permissions and delete the directory manually`,
-                                            );
-                                        }
-                                    }
-                                    resolve();
-                                }
-                            },
-                        );
-                    }
-                });
-            } else {
-                log.error('Please check the Config from InfluxDB');
-                resolve();
-            }
-        })();
-    });
+    if (existsSync(tmpDir)) {
+        await dropTmp();
+    }
 }
 
 /**
  * Removes the temporary dump directory, rejecting when it cannot be deleted.
  *
- * @param options script options, for the error store
+ * @param ctx run context, for the error store and the logger
  * @param tmpDir directory to remove
- * @param log adapter logger
  */
-async function delTmp(options: InfluxDbOptions, tmpDir: string, log: ioBroker.Logger): Promise<void> {
-    log.debug(`Try deleting the InfluxDB tmp directory: "${tmpDir}"`);
+async function delTmp(ctx: BackItUpContext, tmpDir: string): Promise<void> {
+    ctx.log.debug(`Try deleting the InfluxDB tmp directory: "${tmpDir}"`);
 
     return remove(tmpDir)
         .then(() => {
             if (!existsSync(tmpDir)) {
-                log.debug(`InfluxDB tmp directory "${tmpDir}" successfully deleted`);
+                ctx.log.debug(`InfluxDB tmp directory "${tmpDir}" successfully deleted`);
             }
         })
         .catch(err => {
-            options.context.errors.influxDB = JSON.stringify(err);
-            log.error(
+            ctx.errors.influxDB = JSON.stringify(err);
+            ctx.log.error(
                 `The temporary directory "${tmpDir}" could not be deleted. Please check the directory permissions and delete the directory manually`,
             );
             throw err;

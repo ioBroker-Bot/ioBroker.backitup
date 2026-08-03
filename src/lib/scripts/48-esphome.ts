@@ -2,25 +2,28 @@ import { existsSync, readdirSync, statSync } from 'node:fs';
 import { basename, join } from 'node:path';
 
 import { getDate } from '../tools';
-import { compress } from '../targz';
-import type { BackItUpExecuteContext } from '../types';
-import type { BackItUpScriptCallback } from './types';
+import { compressAsync } from '../targz';
+import type { BackItUpProps } from '../types';
 
 interface EsphomeOptions {
-    context: BackItUpExecuteContext;
     /** directory holding the `esphome.<n>` data folders */
     path: string;
-    backupDir: string;
     hostType?: 'Single' | 'Master' | 'Slave';
     slaveSuffix?: string;
     nameSuffix?: string;
 }
 
-export async function command(
-    options: EsphomeOptions,
-    log: ioBroker.Logger,
-    callback?: BackItUpScriptCallback,
-): Promise<void> {
+/**
+ * Packs every `esphome.<n>` data directory it finds.
+ *
+ * As before, a failure of one directory does not stop the others; the first one is what the step
+ * reports once every directory has been dealt with.
+ *
+ * @param props the run context and the esphome slice of the config
+ */
+export async function run(props: BackItUpProps<EsphomeOptions>): Promise<void> {
+    const { context: ctx, options } = props;
+
     const esphomeInst: string[] = [];
     let dirs: string[] = [];
 
@@ -33,16 +36,14 @@ export async function command(
     }
 
     if (dirs.length) {
-        log.debug(`found esphome data: ${dirs.join(',')}`);
+        ctx.log.debug(`found esphome data: ${dirs.join(',')}`);
     } else {
-        log.warn('no esphome data found!!');
-        callback?.(null, 'done');
+        ctx.log.warn('no esphome data found!!');
         return;
     }
 
-    // Cleared after the first failure so the error is only reported once, while the loop keeps
-    // going over the remaining instances.
-    let cb = callback;
+    // The first failure is what the step reports, while the loop keeps going over the rest.
+    let firstError: Error | undefined;
 
     for (const dirName of dirs) {
         const pth = join(options.path, dirName);
@@ -50,58 +51,36 @@ export async function command(
         const nameSuffix = options.hostType === 'Slave' ? options.slaveSuffix || '' : options.nameSuffix || '';
 
         const fileName = join(
-            options.backupDir,
+            ctx.backupDir,
             `${dirName}_${getDate()}${nameSuffix ? `_${nameSuffix}` : ''}_backupiobroker.tar.gz`,
         );
 
         // compress dir
         try {
-            await compressAsync(pth, fileName);
-            log.debug(`Backup created: ${fileName}`);
-
-            options.context.fileNames.push(fileName);
-            options.context.types.push(dirName);
-            options.context.done.push(dirName);
-            esphomeInst.push(dirName);
-        } catch (err) {
-            options.context.errors.esphome = (err as Error).toString();
-            log.error(err);
-
-            if (cb) {
-                cb(err as Error, (err as Error).toString());
-                cb = undefined;
-            }
-        }
-    }
-
-    cb?.(null, 'done');
-}
-
-/**
- * compression as Promise
- *
- * @param pth directory to pack
- * @param fileName archive to write
- */
-function compressAsync(pth: string, fileName: string): Promise<void> {
-    return new Promise((resolve, reject) => {
-        compress(
-            {
+            await compressAsync({
                 src: pth,
                 dest: fileName,
                 tar: {
                     ignore: name => basename(name) === '.esphome' || basename(name) === '.gitignore',
                 },
-            },
-            err => {
-                if (err) {
-                    reject(err);
-                } else {
-                    resolve();
-                }
-            },
-        );
-    });
+            });
+            ctx.log.debug(`Backup created: ${fileName}`);
+
+            ctx.fileNames.push(fileName);
+            ctx.types.push(dirName);
+            ctx.done.push(dirName);
+            esphomeInst.push(dirName);
+        } catch (err) {
+            ctx.errors.esphome = (err as Error).toString();
+            ctx.log.error(err);
+
+            firstError ??= err as Error;
+        }
+    }
+
+    if (firstError) {
+        throw firstError;
+    }
 }
 
 export const ignoreErrors = true;
