@@ -13,7 +13,6 @@ export default [
             'admin/**/*',
             'node_modules/**/*',
             'test/**/*',
-            // compiler output of the backend - the sources live in src/
             'build/**/*',
             'tasks.js',
             'tmp/**/*',
