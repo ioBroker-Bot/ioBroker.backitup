@@ -49,8 +49,7 @@ jobs:
         with:
           node-version: ${{ matrix.node-version }}
           os: ${{ matrix.os }}
-          # Uncomment the following line if your adapter cannot be installed using 'npm ci'
-          install-command: 'npm ci && cd src && npm ci && cd ../src-admin && npm ci && cd ../src-tab && npm ci'
+          install-command: 'npm i && cd src && npm i -f && cd ../src-admin && npm i -f'
           build: true
 
   # Deploys the final package to NPM
@@ -65,7 +64,7 @@ jobs:
 
     runs-on: ubuntu-latest
 
-    # Write permissions are required to create Github releases
+    # Write permissions are required to create GitHub releases
     permissions:
       contents: write
       id-token: write
@@ -74,13 +73,12 @@ jobs:
       - uses: ioBroker/testing-action-deploy@v1
         with:
           node-version: '24.x'
-          # Uncomment the following line if your adapter cannot be installed using 'npm ci'
-          # install-command: 'npm install'
+          install-command: 'npm i && cd src && npm i -f && cd ../src-admin && npm i -f'
           build: true
           github-token: ${{ secrets.GITHUB_TOKEN }}
 
           # When using Sentry for error reporting, Sentry can be informed about new releases
-          # To enable create a API-Token in Sentry (User settings, API keys)
+          # To enable to create an API-Token in Sentry (User settings, API keys)
           # Enter this token as a GitHub secret (with name SENTRY_AUTH_TOKEN) in the repository options
           # Then uncomment and customize the following block:
           sentry: true
