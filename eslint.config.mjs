@@ -27,7 +27,23 @@ export default [
             'admin/words.js',
             'admin/admin.d.ts',
             '**/adapter-config.d.ts',
-        ]
+        ],
+    },
+
+    {
+        // Backend sources.
+        files: ['src/**/*.ts'],
+        rules: {
+            // The promise chains here reject with the plain strings and API error objects that the
+            // callers have always matched on ('Not found', 'Not configured', Dropbox error bodies).
+            // Wrapping them in Error would change what every consumer receives, so the rule is off
+            // for the ported code rather than worked around case by case.
+            '@typescript-eslint/prefer-promise-reject-errors': 'off',
+            // Several engine entry points are declared `async` without awaiting anything. That is
+            // part of their existing shape - dropping the keyword would turn the returned promise
+            // into undefined for any caller that awaits them.
+            '@typescript-eslint/require-await': 'off',
+        },
     },
 
     {
