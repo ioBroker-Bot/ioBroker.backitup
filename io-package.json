@@ -311,8 +311,8 @@
         "condition": {
           "operand": "and",
           "rules": [
-            "oldVersion<3.4.0",
-            "newVersion>=3.4.0"
+            "oldVersion<4.0.0",
+            "newVersion>=4.0.0"
           ]
         },
         "title": {

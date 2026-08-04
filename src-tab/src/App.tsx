@@ -72,32 +72,38 @@ const styles: Record<string, any> = {
         overflow: 'auto',
     },
     headerArea: {
-        backgroundImage: 'linear-gradient(135deg, #164477 0%, #3399CC 30%)',
-        boxShadow:
-            '0 3px 3px 0 rgba(0, 0, 0, 0.14), 0 1px 5px 0 rgba(0, 0, 0, 0.12), 0 3px 1px -2px rgba(0, 0, 0, 0.2)',
+        backgroundImage: 'linear-gradient(120deg, #0F2E5C 0%, #1B6FA8 55%, #29A8D8 100%)',
+        boxShadow: '0 4px 20px 0 rgba(15, 46, 92, 0.35)',
+        borderBottom: '1px solid rgba(255,255,255,0.08)',
     },
     header: {
-        fontSize: '0.9rem',
-        fontWeight: 400,
+        fontSize: '0.95rem',
+        fontWeight: 600,
+        letterSpacing: '0.02em',
+        textTransform: 'uppercase',
         lineHeight: '110%',
         display: 'flex',
         alignItems: 'center',
-        p: '0.3rem',
-        borderRadius: '4px',
-        boxShadow:
-            '0 3px 3px 0 rgba(0, 0, 0, 0.14), 0 1px 5px 0 rgba(0, 0, 0, 0.12), 0 3px 1px -2px rgba(0, 0, 0, 0.2)',
+        p: '0.7rem 1rem',
+        borderRadius: '10px',
+        boxShadow: '0 2px 8px 0 rgba(0,0,0,0.10)',
     },
     headerColored: {
         color: '#FFFFFF',
-        backgroundImage: 'linear-gradient(179deg, #3399CC 0%, #174475 60%)',
+        backgroundImage: 'linear-gradient(120deg, #1B6FA8 0%, #0F2E5C 100%)',
     },
     headerDark: {
         color: '#FFFFFF',
-        backgroundImage: 'linear-gradient(179deg, rgb(25 25 25) 0%, rgba(255, 255, 255, 0.12) 60%)',
+        backgroundImage: 'none',
+        backgroundColor: 'rgba(255,255,255,0.05)',
+        backdropFilter: 'blur(6px)',
+        border: '1px solid rgba(255,255,255,0.08)',
     },
     headerLight: {
         color: '#000',
-        backgroundImage: 'linear-gradient(179deg, rgb(245, 245, 245) 0%, #fff 60%)',
+        backgroundImage: 'none',
+        backgroundColor: '#F4F6F9',
+        border: '1px solid rgba(0,0,0,0.05)',
     },
     subHeader: {
         fontSize: 16,
@@ -106,11 +112,12 @@ const styles: Record<string, any> = {
         color: '#FFF',
     },
     cardHeader: {
-        fontSize: '1.64rem',
-        lineHeight: '110%',
-        fontWeight: '400',
-        marginBottom: 8,
-        padding: 16,
+        fontSize: '1.35rem',
+        lineHeight: '120%',
+        fontWeight: '600',
+        letterSpacing: '-0.01em',
+        marginBottom: 12,
+        padding: '20px 20px 8px 20px',
     },
     headerIcon: {
         height: 24,
@@ -127,13 +134,16 @@ const styles: Record<string, any> = {
         margin: '5px 10px 0 -25px',
     },
     icon: {
-        color: '#f5f5f5',
-        height: 70,
-        width: 80,
-        margin: 4,
-        marginTop: '1.5rem',
-        fontSize: 70,
-        filter: 'drop-shadow(2px 2px 2px rgba(0, 0, 0, 0.2))',
+        color: '#fff',
+        height: 56,
+        width: 56,
+        margin: 12,
+        marginTop: '1.4rem',
+        fontSize: 30,
+        padding: 13,
+        borderRadius: '50%',
+        boxSizing: 'content-box',
+        filter: 'none',
     },
     iconDiv: {
         display: 'inline-block',
@@ -143,10 +153,10 @@ const styles: Record<string, any> = {
         verticalAlign: 'top',
     },
     iconDivLight: {
-        backgroundImage: 'linear-gradient(179deg, #e2e2e2 40%, #474747 180%)',
+        backgroundImage: 'none',
     },
     iconDivDark: {
-        backgroundImage: 'linear-gradient(179deg, #535353 40%, #e2e2e2 180%)',
+        backgroundImage: 'none',
     },
     textDiv: {
         width: 'calc(100% - 120px)',
@@ -155,22 +165,35 @@ const styles: Record<string, any> = {
     cardContent: (theme: IobTheme): React.CSSProperties => ({
         padding: 0,
         height: '100%',
-        boxShadow: '0 2px 2px 0 rgb(0 0 0 / 14%), 0 3px 1px -2px rgb(0 0 0 / 12%), 0 1px 5px 0 rgb(0 0 0 / 20%)',
-        backgroundImage:
-            theme.palette.mode === 'dark' ? undefined : 'linear-gradient(179deg, #fff 50%, rgb(0 0 0 / 14%) 100%)',
+        borderRadius: '16px',
+        boxShadow:
+            theme.palette.mode === 'dark'
+                ? '0 1px 2px rgba(0,0,0,0.4), 0 4px 12px rgba(0,0,0,0.3)'
+                : '0 1px 2px rgba(20,40,80,0.06), 0 6px 16px rgba(20,40,80,0.08)',
+        backgroundImage: 'none',
+        backgroundColor: theme.palette.mode === 'dark' ? 'rgba(255,255,255,0.03)' : '#FFFFFF',
+        border: theme.palette.mode === 'dark' ? '1px solid rgba(255,255,255,0.06)' : '1px solid rgba(20,40,80,0.05)',
     }),
     card: {
+        borderRadius: '16px',
+        transition: 'transform 0.18s ease, box-shadow 0.18s ease',
         '&:hover': {
-            boxShadow: '0 8px 17px 0 rgba(0, 0, 0, .2), 0 6px 20px 0 rgba(0, 0, 0, .19)',
+            transform: 'translateY(-2px)',
+            boxShadow: '0 10px 24px 0 rgba(20,40,80,0.14)',
         },
     },
     label: {
-        fontWeight: 'bold',
-        fontSize: '0.9em',
+        fontWeight: 600,
+        fontSize: '0.82em',
+        opacity: 0.65,
+        textTransform: 'uppercase',
+        letterSpacing: '0.02em',
+        marginBottom: 2,
     },
     value: {
-        fontSize: 'clamp(0.7em, 0.5em + 0.6vw, 0.9em)',
-        marginBottom: '0.5rem',
+        fontSize: 'clamp(0.85em, 0.6em + 0.6vw, 1em)',
+        fontWeight: 500,
+        marginBottom: '0.9rem',
     },
     footer: {
         fontSize: '0.9rem',
@@ -186,29 +209,50 @@ const styles: Record<string, any> = {
         padding: '5px 0 5px 0',
         margin: '0 0 0 -8px',
         cursor: 'pointer',
-        boxShadow:
-            '0 3px 3px 0 rgba(0, 0, 0, 0.14), 0 1px 5px 0 rgba(0, 0, 0, 0.12), 0 3px 1px -2px rgba(0, 0, 0, 0.2)',
-        textDecoration: 'underline',
+        boxShadow: '0 -2px 10px 0 rgba(0,0,0,0.08)',
+        textDecoration: 'none',
+        opacity: 0.85,
+        transition: 'opacity 0.15s ease',
     },
     footerColored: {
         color: '#FFF',
-        backgroundImage: 'linear-gradient(179deg, #3399CC 0%, #174475 60%)',
+        backgroundImage: 'linear-gradient(90deg, #0F2E5C 0%, #1B6FA8 100%)',
     },
     footerDark: {
-        backgroundImage: 'linear-gradient(179deg, rgb(25 25 25) 0%, rgba(255, 255, 255, 0.12) 60%)',
+        backgroundColor: 'rgba(255,255,255,0.04)',
+        backdropFilter: 'blur(6px)',
         color: '#FFF',
     },
     footerLight: {
-        backgroundImage: 'linear-gradient(179deg, rgb(245, 245, 245) 0%, #fff 60%)',
-        color: '#0000EE',
+        backgroundColor: '#F4F6F9',
+        color: '#1B6FA8',
     },
     buttonWidth: {
         width: '100%',
     },
     helpButton: {
-        width: 36,
-        height: 36,
+        width: 38,
+        height: 38,
         marginLeft: 8,
+        backgroundColor: 'rgba(255,255,255,0.12)',
+        color: '#fff',
+        boxShadow: 'none',
+    },
+    button: {
+        borderRadius: '10px',
+        textTransform: 'none',
+        fontWeight: 600,
+        boxShadow: 'none',
+    },
+    list: {
+        listStyleType: 'disc',
+        padding: '0 20px 20px 20px',
+        margin: 0,
+        overflow: 'visible',
+    },
+    listItem: {
+        marginBottom: 14,
+        lineHeight: 1.5,
     },
 };
 
@@ -395,34 +439,37 @@ export default class App extends GenericApp<GenericAppProps, AppState> {
                             ...(this.state.themeType === 'dark' ? styles.iconDivDark : styles.iconDivLight),
                         }}
                     >
-                        <InfoOutlined style={styles.icon} />
+                        <InfoOutlined
+                            style={styles.icon}
+                            sx={{ backgroundColor: 'rgba(27,111,168,0.9)' }}
+                        />
                     </div>
                     <div style={styles.textDiv}>
                         <div style={styles.cardHeader}>{I18n.t('Backup Information')}</div>
-                        <ul style={{ maxHeight: 210, overflow: 'auto', listStyleType: 'none' }}>
+                        <ul style={styles.list}>
                             {this.state.native.minimalEnabled && (
-                                <li>
+                                <li style={styles.listItem}>
                                     <History style={styles.historyIcon} />
                                     <div style={styles.label}>{I18n.t('Last ioBroker backup:')}</div>
                                     <div style={styles.value}>{this.state.iobrokerLastTime}</div>
                                 </li>
                             )}
                             {this.state.native.minimalEnabled && (
-                                <li>
+                                <li style={styles.listItem}>
                                     <Alarm style={styles.historyIcon} />
                                     <div style={styles.label}>{I18n.t('Next ioBroker backup:')}</div>
                                     <div style={styles.value}>{this.state.iobrokerNextTime}</div>
                                 </li>
                             )}
                             {this.state.native.ccuEnabled && (
-                                <li>
+                                <li style={styles.listItem}>
                                     <History style={styles.historyIcon} />
                                     <div style={styles.label}>{I18n.t('Last CCU backup:')}</div>
                                     <div style={styles.value}>{this.state.ccuLastTime}</div>
                                 </li>
                             )}
                             {this.state.native.ccuEnabled && (
-                                <li>
+                                <li style={styles.listItem}>
                                     <Alarm style={styles.historyIcon} />
                                     <div style={styles.label}>{I18n.t('Next CCU backup:')}</div>
                                     <div style={styles.value}>{this.state.ccuNextTime}</div>
@@ -453,14 +500,24 @@ export default class App extends GenericApp<GenericAppProps, AppState> {
                             ...(this.state.themeType === 'dark' ? styles.iconDivDark : styles.iconDivLight),
                         }}
                     >
-                        <StorageOutlined style={styles.icon} />
+                        <StorageOutlined
+                            style={styles.icon}
+                            sx={{ backgroundColor: 'rgba(41,168,216,0.9)' }}
+                        />
                     </div>
                     <div style={styles.textDiv}>
                         <div style={styles.cardHeader}>{I18n.t('Activated storage options')}</div>
-                        <ul style={{ maxHeight: 210, overflow: 'auto', listStyleType: 'disclosure-closed' }}>
+                        <ul style={styles.list}>
                             {options.map(
                                 option =>
-                                    this.state.native[option.name] && <li key={option.name}>{I18n.t(option.label)}</li>,
+                                    this.state.native[option.name] && (
+                                        <li
+                                            key={option.name}
+                                            style={{ ...styles.listItem, fontSize: '1em' }}
+                                        >
+                                            {I18n.t(option.label)}
+                                        </li>
+                                    ),
                             )}
                         </ul>
                     </div>
@@ -497,14 +554,24 @@ export default class App extends GenericApp<GenericAppProps, AppState> {
                             ...(this.state.themeType === 'dark' ? styles.iconDivDark : styles.iconDivLight),
                         }}
                     >
-                        <CloudUploadOutlined style={styles.icon} />
+                        <CloudUploadOutlined
+                            style={styles.icon}
+                            sx={{ backgroundColor: 'rgba(15,46,92,0.9)' }}
+                        />
                     </div>
                     <div style={styles.textDiv}>
                         <div style={styles.cardHeader}>{I18n.t('Activated backup options')}</div>
-                        <ul style={{ maxHeight: 210, overflow: 'auto', listStyleType: 'disclosure-closed' }}>
+                        <ul style={styles.list}>
                             {options.map(
                                 option =>
-                                    this.state.native[option.name] && <li key={option.name}>{I18n.t(option.label)}</li>,
+                                    this.state.native[option.name] && (
+                                        <li
+                                            key={option.name}
+                                            style={{ ...styles.listItem, fontSize: '1em' }}
+                                        >
+                                            {I18n.t(option.label)}
+                                        </li>
+                                    ),
                             )}
                         </ul>
                     </div>
@@ -563,11 +630,20 @@ export default class App extends GenericApp<GenericAppProps, AppState> {
                                     style={{ height: 48, marginRight: 16 }}
                                 />
                                 <div>
-                                    <div style={{ fontWeight: 'bold', fontSize: 20, color: '#fff' }}>Backitup</div>
                                     <div
                                         style={{
+                                            fontWeight: 700,
+                                            fontSize: 20,
                                             color: '#fff',
-                                            fontStyle: 'italic',
+                                            letterSpacing: '-0.01em',
+                                        }}
+                                    >
+                                        Backitup
+                                    </div>
+                                    <div
+                                        style={{
+                                            color: 'rgba(255,255,255,0.85)',
+                                            fontStyle: 'normal',
                                             fontSize: 'clamp(0.7em, 0.7em + 0.6vw, 1em)',
                                         }}
                                     >
@@ -580,7 +656,7 @@ export default class App extends GenericApp<GenericAppProps, AppState> {
                                     display: 'inline-block',
                                     position: 'absolute',
                                     right: 10,
-                                    top: 13,
+                                    top: 5,
                                 }}
                             >
                                 <Tooltip
@@ -641,7 +717,7 @@ export default class App extends GenericApp<GenericAppProps, AppState> {
                             <Box
                                 component="div"
                                 sx={{
-                                    m: '0.2rem 0 1.5rem 0',
+                                    m: '1rem 0 2rem 0',
                                     ...styles.header,
                                     ...(this.state.theme.name === 'light' ? styles.headerLight : undefined),
                                     ...(this.state.theme.name === 'colored' ? styles.headerColored : undefined),
@@ -655,7 +731,7 @@ export default class App extends GenericApp<GenericAppProps, AppState> {
                                 style={{
                                     display: 'grid',
                                     gridTemplateColumns: 'repeat(auto-fit, minmax(350px, 1fr))',
-                                    gap: 12,
+                                    gap: 16,
                                     minHeight: 300,
                                     gridAutoRows: '1fr',
                                 }}
@@ -667,7 +743,7 @@ export default class App extends GenericApp<GenericAppProps, AppState> {
                             <Box
                                 component="div"
                                 sx={{
-                                    m: '1.5rem 0 1.5rem 0',
+                                    m: '2rem 0 2rem 0',
                                     ...styles.header,
                                     ...(this.state.theme.name === 'light' ? styles.headerLight : undefined),
                                     ...(this.state.theme.name === 'colored' ? styles.headerColored : undefined),
@@ -681,7 +757,7 @@ export default class App extends GenericApp<GenericAppProps, AppState> {
                                 style={{
                                     display: 'grid',
                                     gridTemplateColumns: 'repeat(auto-fit, minmax(350px, 1fr))',
-                                    gap: 12,
+                                    gap: 16,
                                     justifyContent: 'space-evenly',
                                     alignContent: 'center',
                                     justifyItems: 'stretch',
@@ -690,7 +766,7 @@ export default class App extends GenericApp<GenericAppProps, AppState> {
                             >
                                 {this.state.myAlive && this.state.native.minimalEnabled ? (
                                     <BackupNow
-                                        style={{ ...styles.buttonWidth, width: '100%' }}
+                                        style={{ ...styles.buttonWidth, width: '100%', ...styles.button }}
                                         color={this.state.themeType === 'dark' ? 'primary' : 'grey'}
                                         oContext={{
                                             adapterName: this.adapterName,
@@ -728,6 +804,7 @@ export default class App extends GenericApp<GenericAppProps, AppState> {
                                 ) : (
                                     <Button
                                         style={{ width: '100%' }}
+                                        sx={styles.button}
                                         disabled
                                         color={this.state.themeType === 'dark' ? 'primary' : 'grey'}
                                         variant="contained"
@@ -738,7 +815,7 @@ export default class App extends GenericApp<GenericAppProps, AppState> {
                                 )}
                                 {this.state.myAlive && this.state.native.ccuEnabled ? (
                                     <BackupNow
-                                        style={{ ...styles.buttonWidth, width: '100%' }}
+                                        style={{ ...styles.buttonWidth, width: '100%', ...styles.button }}
                                         oContext={{
                                             adapterName: this.adapterName,
                                             socket: this.socket,
@@ -776,6 +853,7 @@ export default class App extends GenericApp<GenericAppProps, AppState> {
                                 ) : (
                                     <Button
                                         style={{ width: '100%' }}
+                                        sx={styles.button}
                                         disabled
                                         color={this.state.themeType === 'dark' ? 'primary' : 'grey'}
                                         variant="contained"
@@ -786,6 +864,7 @@ export default class App extends GenericApp<GenericAppProps, AppState> {
                                 )}
                                 <Button
                                     style={{ width: '100%' }}
+                                    sx={styles.button}
                                     onClick={() => this.setState({ showBackupHistory: true })}
                                     variant="contained"
                                     color={this.state.themeType === 'dark' ? 'primary' : 'grey'}
@@ -795,6 +874,7 @@ export default class App extends GenericApp<GenericAppProps, AppState> {
                                 </Button>
                                 <Button
                                     style={{ width: '100%' }}
+                                    sx={styles.button}
                                     variant="contained"
                                     color={this.state.themeType === 'dark' ? 'primary' : 'grey'}
                                     onClick={async () => {
@@ -828,7 +908,7 @@ export default class App extends GenericApp<GenericAppProps, AppState> {
                             <Box
                                 component="div"
                                 sx={{
-                                    m: '1.5rem 0px 1.0rem 0px',
+                                    m: '1.5rem 0px 1rem 0px',
                                     ...styles.header,
                                     ...(this.state.theme.name === 'light' ? styles.headerLight : undefined),
                                     ...(this.state.theme.name === 'colored' ? styles.headerColored : undefined),
@@ -843,7 +923,7 @@ export default class App extends GenericApp<GenericAppProps, AppState> {
                                     width: '100%',
                                     display: 'grid',
                                     gridTemplateColumns: 'repeat(auto-fit, minmax(350px, 1fr))',
-                                    gap: 12,
+                                    gap: 16,
                                     justifyItems: 'stretch',
                                     justifyContent: 'space-evenly',
                                     alignContent: 'center',
@@ -862,6 +942,7 @@ export default class App extends GenericApp<GenericAppProps, AppState> {
                                 />
                                 <Button
                                     style={{ width: '100%', marginTop: '0.5rem' }}
+                                    sx={styles.button}
                                     onClick={() => this.setState({ showGetBackups: true })}
                                     disabled={!this.state.myAlive}
                                     variant="contained"
@@ -872,6 +953,7 @@ export default class App extends GenericApp<GenericAppProps, AppState> {
                                 </Button>
                                 <Button
                                     style={{ width: '100%', marginTop: '0.5rem' }}
+                                    sx={styles.button}
                                     onClick={() => this.setState({ showUploadBackup: true })}
                                     variant="contained"
                                     color={this.state.themeType === 'dark' ? 'primary' : 'grey'}
@@ -881,6 +963,7 @@ export default class App extends GenericApp<GenericAppProps, AppState> {
                                 </Button>
                                 <Button
                                     style={{ width: '100%', marginTop: '0.5rem' }}
+                                    sx={styles.button}
                                     variant="contained"
                                     color={this.state.themeType === 'dark' ? 'primary' : 'grey'}
                                     onClick={() => this.setState({ showUploadSettings: true })}
