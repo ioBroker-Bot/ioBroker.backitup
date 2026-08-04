@@ -1,4 +1,8 @@
 ## Changelog
+## 3.3.13 (2025-12-14)
+* (simatec) Fix Error Log for CCU Backup
+
+
 ## 3.3.12 (2025-12-14)
 * (simatec) Fix Error Log for CCU Backup
 * (simatec) dependencies updated
