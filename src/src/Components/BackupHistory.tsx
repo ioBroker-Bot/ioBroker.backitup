@@ -18,7 +18,7 @@ import {
 
 import { Close, FormatListBulleted, BugReport } from '@mui/icons-material';
 
-import { type AdminConnection, I18n, type ThemeType } from '@iobroker/adapter-react-v5';
+import { type AdminConnection, I18n, type ThemeType } from '@iobroker/gui-components';
 import type { Breakpoint } from '@mui/system';
 
 interface BackupHistoryProps {

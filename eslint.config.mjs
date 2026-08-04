@@ -9,7 +9,7 @@ export default [
         // specify files to exclude from linting here
         ignores: [
             'src-admin/**/*',
-            'src/**/*',
+            'src-tab/**/*',
             'admin/**/*',
             'node_modules/**/*',
             'test/**/*',
@@ -26,8 +26,8 @@ export default [
             'admin/build',
             'admin/words.js',
             'admin/admin.d.ts',
-            '**/adapter-config.d.ts',    
-        ] 
+            '**/adapter-config.d.ts',
+        ]
     },
 
     {

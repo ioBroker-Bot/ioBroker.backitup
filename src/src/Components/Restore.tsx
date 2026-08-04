@@ -13,7 +13,7 @@ import {
 
 import { Close, SettingsBackupRestore } from '@mui/icons-material';
 
-import { I18n, DialogError, type AdminConnection, type ThemeType } from '@iobroker/adapter-react-v5';
+import { I18n, DialogError, type AdminConnection, type ThemeType } from '@iobroker/gui-components';
 import type { ExecutionLine } from './types';
 
 const styles: Record<string, React.CSSProperties> = {
@@ -120,8 +120,8 @@ interface RestoreState {
 
 class Restore extends Component<RestoreProps, RestoreState> {
     lastExecutionLine: string;
-    textRef: React.RefObject<HTMLDivElement>;
-    textRefRestore: React.RefObject<HTMLDivElement>;
+    textRef: React.RefObject<HTMLDivElement | null>;
+    textRefRestore: React.RefObject<HTMLDivElement | null>;
     retries: number;
     polling?: ReturnType<typeof setInterval> | null;
     closeTimeout?: ReturnType<typeof setTimeout> | null;

@@ -20,7 +20,7 @@
             crossorigin="use-credentials"
         />
         <script>
-            var script = document.createElement('script');
+            const script = document.createElement('script');
             window.registerSocketOnLoad = function (cb) {
                 window.socketLoadedHandler = cb;
             };
@@ -43,7 +43,7 @@
         <div id="root"></div>
         <script
             type="module"
-            src="./src/index.tsx"
+            src="/src/index.tsx"
         ></script>
     </body>
 </html>

@@ -7,7 +7,7 @@
             // this component is not visible in the UI
             // it checks the configuration
             type: 'custom',
-            bundlerType: 'module',
+            guiApi: 2,
             i18n: true,
             url: 'custom/customComponents.js',
             name: 'ConfigCustomBackItUpSet/Components/CheckAllConfigInvisible',
@@ -24,7 +24,7 @@
         },
         minimalEnabled: {
             type: 'custom',
-            bundlerType: 'module',
+            guiApi: 2,
             xs: 12,
             sm: 6,
             md: 4,
@@ -40,7 +40,7 @@
         },
         ccuEnabled: {
             type: 'custom',
-            bundlerType: 'module',
+            guiApi: 2,
             xs: 12,
             sm: 6,
             md: 4,
@@ -67,7 +67,7 @@
         javascriptsEnabled: {
             disabled: "data.hostType === 'Slave'",
             type: 'custom',
-            bundlerType: 'module',
+            guiApi: 2,
             xs: 12,
             sm: 6,
             md: 4,
@@ -86,7 +86,7 @@
         },
         zigbee2mqttEnabled: {
             type: 'custom',
-            bundlerType: 'module',
+            guiApi: 2,
             xs: 12,
             sm: 6,
             md: 4,
@@ -105,7 +105,7 @@
         },
         zigbeeEnabled: {
             type: 'custom',
-            bundlerType: 'module',
+            guiApi: 2,
             xs: 12,
             sm: 6,
             md: 4,
@@ -125,7 +125,7 @@
         historyEnabled: {
             newLine: true,
             type: 'custom',
-            bundlerType: 'module',
+            guiApi: 2,
             xs: 12,
             sm: 6,
             md: 4,
@@ -144,7 +144,7 @@
         },
         influxDBEnabled: {
             type: 'custom',
-            bundlerType: 'module',
+            guiApi: 2,
             xs: 12,
             sm: 6,
             md: 4,
@@ -163,7 +163,7 @@
         },
         mySqlEnabled: {
             type: 'custom',
-            bundlerType: 'module',
+            guiApi: 2,
             xs: 12,
             sm: 6,
             md: 4,
@@ -182,7 +182,7 @@
         },
         pgSqlEnabled: {
             type: 'custom',
-            bundlerType: 'module',
+            guiApi: 2,
             xs: 12,
             sm: 6,
             md: 4,
@@ -201,7 +201,7 @@
         },
         sqliteEnabled: {
             type: 'custom',
-            bundlerType: 'module',
+            guiApi: 2,
             xs: 12,
             sm: 6,
             md: 4,
@@ -230,7 +230,7 @@
         noderedEnabled: {
             newLine: true,
             type: 'custom',
-            bundlerType: 'module',
+            guiApi: 2,
             xs: 12,
             sm: 6,
             md: 4,
@@ -250,7 +250,7 @@
         },
         yahkaEnabled: {
             type: 'custom',
-            bundlerType: 'module',
+            guiApi: 2,
             xs: 12,
             sm: 6,
             md: 4,
@@ -269,7 +269,7 @@
         },
         jarvisEnabled: {
             type: 'custom',
-            bundlerType: 'module',
+            guiApi: 2,
             xs: 12,
             sm: 6,
             md: 4,
@@ -288,7 +288,7 @@
         },
         esphomeEnabled: {
             type: 'custom',
-            bundlerType: 'module',
+            guiApi: 2,
             xs: 12,
             sm: 6,
             md: 4,

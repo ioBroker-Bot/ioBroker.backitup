@@ -27,9 +27,9 @@ import {
     type IobTheme,
     type GenericAppProps,
     type GenericAppState,
-} from '@iobroker/adapter-react-v5';
+} from '@iobroker/gui-components';
 
-import logo from './assets/backitup.png';
+import logo from './assets/backitup.svg';
 
 import BackupHistory from './Components/BackupHistory';
 import GetBackups from './Components/GetBackups';
@@ -333,9 +333,9 @@ class App extends GenericApp<GenericAppProps, AppState> {
         this.setState(newState as AppState);
     }
 
-    onSettings = (id: string, obj: ioBroker.InstanceObject): void => {
-        if (id === `system.adapter.${this.adapterName}.${this.instance}`) {
-            this.setState({ native: obj.native });
+    onSettings = (id: string, obj: ioBroker.Object | null | undefined): void => {
+        if (obj && id === `system.adapter.${this.adapterName}.${this.instance}`) {
+            this.setState({ native: (obj as ioBroker.InstanceObject).native });
         }
     };
 
@@ -720,7 +720,7 @@ class App extends GenericApp<GenericAppProps, AppState> {
                                         themeName={this.state.themeName}
                                         data={{}}
                                         originalData={{}}
-                                        onChange={(_attr: string): void => {}}
+                                        onChange={(): void => {}}
                                     />
                                 ) : (
                                     <Button
@@ -768,7 +768,7 @@ class App extends GenericApp<GenericAppProps, AppState> {
                                         themeName={this.state.themeName}
                                         data={{}}
                                         originalData={{}}
-                                        onChange={(_attr: string): void => {}}
+                                        onChange={(): void => {}}
                                     />
                                 ) : (
                                     <Button

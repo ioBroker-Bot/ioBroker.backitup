@@ -6,7 +6,7 @@
             // this component is not visible in the UI
             // it checks the configuration
             type: 'custom',
-            bundlerType: 'module',
+            guiApi: 2,
             i18n: true,
             url: 'custom/customComponents.js',
             name: 'ConfigCustomBackItUpSet/Components/CheckAllConfigInvisible',
@@ -23,7 +23,7 @@
         },
         detectNow: {
             type: 'custom',
-            bundlerType: 'module',
+            guiApi: 2,
             custom: {
                 adapter: 'history',
             },

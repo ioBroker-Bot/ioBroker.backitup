@@ -138,7 +138,7 @@
     "platform": "Javascript/Node.js",
     "mode": "daemon",
     "compact": true,
-    "icon": "backitup.png",
+    "icon": "backitup.svg",
     "messagebox": true,
     "stopBeforeUpdate": true,
     "connectionType": "local",
@@ -168,7 +168,7 @@
     ],
     "globalDependencies": [
       {
-        "admin": ">=7.6.20"
+        "admin": ">=8.0.0"
       }
     ],
     "adminUI": {
@@ -176,7 +176,7 @@
       "tab": "materialize"
     },
     "enabled": true,
-    "extIcon": "https://raw.githubusercontent.com/simatec/ioBroker.backitup/master/admin/backitup.png",
+    "extIcon": "https://raw.githubusercontent.com/simatec/ioBroker.backitup/master/admin/backitup.svg",
     "keywords": [
       "Backup",
       "iob",

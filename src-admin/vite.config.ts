@@ -1,7 +1,6 @@
 import commonjs from 'vite-plugin-commonjs';
-import vitetsConfigPaths from 'vite-tsconfig-paths';
 import { federation } from '@module-federation/vite';
-import { moduleFederationShared } from '@iobroker/adapter-react-v5/modulefederation.admin.config';
+import { moduleFederationShared } from '@iobroker/gui-components/modulefederation.admin.config';
 import pack from './package.json';
 
 const config = {
@@ -17,10 +16,11 @@ const config = {
             shared: moduleFederationShared(pack),
             dts: false,
         }),
-        // react(),
-        vitetsConfigPaths(),
         commonjs(),
     ],
+    resolve: {
+        tsconfigPaths: true,
+    },
     server: {
         port: 3000,
         proxy: {

@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64" role="img" aria-label="BackItUp">
+    <circle cx="32" cy="32" r="32" fill="#FF013E" />
+    <g fill="none" stroke="#FFF">
+        <!-- clock face: open ring, gap at the lower left for the arrow head -->
+        <path d="M12.15 29.56A20 20 0 1 1 17.86 46.14" stroke-width="4" />
+        <!-- minute hand -->
+        <path d="M32 17v15" stroke-width="2" />
+        <!-- hour hand -->
+        <path d="m32 32 8 8" stroke-width="1.5" stroke-linecap="round" />
+    </g>
+    <!-- arrow head, pointing counterclockwise -->
+    <path d="M6.6 29.5h11.8L12.5 39Z" fill="#FFF" />
+    <!-- hub -->
+    <circle cx="32" cy="32" r="2" fill="#FFF" />
+</svg>
