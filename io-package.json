@@ -1,8 +1,21 @@
 {
   "common": {
     "name": "backitup",
-    "version": "4.0.0",
+    "version": "4.0.1",
     "news": {
+      "4.0.1": {
+        "en": "Fix Backitup Tab",
+        "de": "Backup-Registerkarte reparieren",
+        "ru": "Исправить вкладку «Резервное копирование»",
+        "pt": "Corrigir guia do Backitup",
+        "nl": "Het Backitup-tabblad repareren",
+        "fr": "Correction de l'onglet Backitup",
+        "it": "Risolvi la scheda di backup",
+        "es": "Reparar la pestaña de copia de seguridad",
+        "pl": "Napraw kartę kopii zapasowej",
+        "uk": "Виправити вкладку резервного копіювання",
+        "zh-cn": "修复备份选项卡"
+      },
       "4.0.0": {
         "en": "dependencies updated\nFix Translation\nsmall Fixes\nIntegrated token encryption\nFix Yahka Backup\nUpdated GUI packages und removed linter errors\nUpdate Node Engine\nMigrated to Admin 8\nRedesign Backitup Tab",
         "de": "Abhängigkeiten aktualisiert\nÜbersetzung korrigieren\nkleine Korrekturen\nIntegrierte Token-Verschlüsselung\nYahka-Backup reparieren\nAktualisierte GUI-Pakete und behobene Linter-Fehler\nKnoten-Engine aktualisieren\nMigration zu Admin 8\nNeugestaltung der Backup-Registerkarte",
@@ -80,19 +93,6 @@
         "pl": "Popraw dziennik błędów dla kopii zapasowej CCU",
         "uk": "Виправлено помилку Log для CCU Backup",
         "zh-cn": "修复 CCU 备份错误日志"
-      },
-      "3.3.12": {
-        "en": "Fix Error Log for CCU Backup\ndependencies updated",
-        "de": "Fehlersuche für CCU Backup behoben\naktualisierte abhängigkeiten",
-        "ru": "Исправьте ошибку Log для резервного копирования CCU\nобновленные зависимости",
-        "pt": "Corrigir o Registo de Erros para a Cópia de Segurança da CCU\ndependências atualizadas",
-        "nl": "Foutlogboek voor CCU-backup herstellen\nafhankelijkheden bijgewerkt",
-        "fr": "Correction du journal d'erreur pour la sauvegarde CCU\ndépendances mises à jour",
-        "it": "Fissare il log degli errori per il backup CCU\ndipendenze aggiornate",
-        "es": "Registro de error de fijación para el respaldo de CCU\ndependencias actualizadas",
-        "pl": "Popraw dziennik błędów dla kopii zapasowej CCU\nzaktualizowane zależności",
-        "uk": "Виправлено помилку Log для CCU Backup\nоновлені залежності",
-        "zh-cn": "修复 CCU 备份错误日志\n更新依赖关系"
       }
     },
     "titleLang": {
