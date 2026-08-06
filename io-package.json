@@ -143,6 +143,7 @@
     "stopBeforeUpdate": true,
     "connectionType": "local",
     "dataSource": "assumption",
+    "nogit": true,
     "tier": 2,
     "adminTab": {
       "name": {

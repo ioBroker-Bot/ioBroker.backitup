@@ -112,12 +112,11 @@ const styles: Record<string, any> = {
         color: '#FFF',
     },
     cardHeader: {
-        fontSize: '1.35rem',
-        lineHeight: '120%',
+        fontSize: '1.2rem',
+        lineHeight: '46px',
         fontWeight: '600',
         letterSpacing: '-0.01em',
-        marginBottom: 12,
-        padding: '20px 20px 8px 20px',
+        marginBottom: 8,
     },
     headerIcon: {
         height: 24,
@@ -127,45 +126,46 @@ const styles: Record<string, any> = {
         margin: '0 10px 0 5px',
     },
     historyIcon: {
-        height: 24,
-        width: 24,
-        fontSize: 24,
-        float: 'left',
-        margin: '5px 10px 0 -25px',
+        height: 20,
+        width: 20,
+        fontSize: 20,
+        marginTop: 2,
+        flexShrink: 0,
+        opacity: 0.75,
     },
     icon: {
         color: '#fff',
-        height: 56,
-        width: 56,
-        margin: 12,
-        marginTop: '1.4rem',
-        fontSize: 30,
-        padding: 13,
+        height: 46,
+        width: 46,
+        fontSize: 24,
+        padding: 12,
         borderRadius: '50%',
         boxSizing: 'content-box',
         filter: 'none',
     },
     iconDiv: {
-        display: 'inline-block',
-        maxWidth: '30%',
-        height: '100%',
-        marginRight: 8,
-        verticalAlign: 'top',
+        flexShrink: 0,
+        display: 'flex',
+        alignItems: 'flex-start',
     },
-    iconDivLight: {
-        backgroundImage: 'none',
-    },
-    iconDivDark: {
-        backgroundImage: 'none',
-    },
+    iconDivLight: {},
+    iconDivDark: {},
     textDiv: {
-        width: 'calc(100% - 120px)',
-        display: 'inline-block',
+        flex: 1,
+        minWidth: 0,
+    },
+    cardInner: {
+        display: 'flex',
+        alignItems: 'flex-start',
+        gap: 48,
+        padding: '22px 24px',
+        height: '100%',
+        boxSizing: 'border-box',
     },
     cardContent: (theme: IobTheme): React.CSSProperties => ({
         padding: 0,
         height: '100%',
-        borderRadius: '16px',
+        borderRadius: '14px',
         boxShadow:
             theme.palette.mode === 'dark'
                 ? '0 1px 2px rgba(0,0,0,0.4), 0 4px 12px rgba(0,0,0,0.3)'
@@ -175,7 +175,7 @@ const styles: Record<string, any> = {
         border: theme.palette.mode === 'dark' ? '1px solid rgba(255,255,255,0.06)' : '1px solid rgba(20,40,80,0.05)',
     }),
     card: {
-        borderRadius: '16px',
+        borderRadius: '14px',
         transition: 'transform 0.18s ease, box-shadow 0.18s ease',
         '&:hover': {
             transform: 'translateY(-2px)',
@@ -184,16 +184,15 @@ const styles: Record<string, any> = {
     },
     label: {
         fontWeight: 600,
-        fontSize: '0.82em',
+        fontSize: '0.78em',
         opacity: 0.65,
         textTransform: 'uppercase',
         letterSpacing: '0.02em',
-        marginBottom: 2,
+        marginBottom: 1,
     },
     value: {
-        fontSize: 'clamp(0.85em, 0.6em + 0.6vw, 1em)',
+        fontSize: 'clamp(0.8em, 0.55em + 0.6vw, 0.95em)',
         fontWeight: 500,
-        marginBottom: '0.9rem',
     },
     footer: {
         fontSize: '0.9rem',
@@ -242,17 +241,22 @@ const styles: Record<string, any> = {
         borderRadius: '10px',
         textTransform: 'none',
         fontWeight: 600,
-        boxShadow: 'none',
     },
     list: {
         listStyleType: 'disc',
-        padding: '0 20px 20px 20px',
+        padding: '0 0 0 18px',
         margin: 0,
         overflow: 'visible',
     },
     listItem: {
-        marginBottom: 14,
-        lineHeight: 1.5,
+        marginBottom: 8,
+        lineHeight: 1.4,
+    },
+    infoListItem: {
+        display: 'flex',
+        alignItems: 'flex-start',
+        gap: 10,
+        marginBottom: 10,
     },
 };
 
@@ -433,49 +437,59 @@ export default class App extends GenericApp<GenericAppProps, AppState> {
         return (
             <Card sx={styles.card}>
                 <CardContent sx={styles.cardContent}>
-                    <div
-                        style={{
-                            ...styles.iconDiv,
-                            ...(this.state.themeType === 'dark' ? styles.iconDivDark : styles.iconDivLight),
-                        }}
-                    >
-                        <InfoOutlined
-                            style={styles.icon}
-                            sx={{ backgroundColor: 'rgba(27,111,168,0.9)' }}
-                        />
-                    </div>
-                    <div style={styles.textDiv}>
-                        <div style={styles.cardHeader}>{I18n.t('Backup Information')}</div>
-                        <ul style={styles.list}>
-                            {this.state.native.minimalEnabled && (
-                                <li style={styles.listItem}>
-                                    <History style={styles.historyIcon} />
-                                    <div style={styles.label}>{I18n.t('Last ioBroker backup:')}</div>
-                                    <div style={styles.value}>{this.state.iobrokerLastTime}</div>
-                                </li>
-                            )}
-                            {this.state.native.minimalEnabled && (
-                                <li style={styles.listItem}>
-                                    <Alarm style={styles.historyIcon} />
-                                    <div style={styles.label}>{I18n.t('Next ioBroker backup:')}</div>
-                                    <div style={styles.value}>{this.state.iobrokerNextTime}</div>
-                                </li>
-                            )}
-                            {this.state.native.ccuEnabled && (
-                                <li style={styles.listItem}>
-                                    <History style={styles.historyIcon} />
-                                    <div style={styles.label}>{I18n.t('Last CCU backup:')}</div>
-                                    <div style={styles.value}>{this.state.ccuLastTime}</div>
-                                </li>
-                            )}
-                            {this.state.native.ccuEnabled && (
-                                <li style={styles.listItem}>
-                                    <Alarm style={styles.historyIcon} />
-                                    <div style={styles.label}>{I18n.t('Next CCU backup:')}</div>
-                                    <div style={styles.value}>{this.state.ccuNextTime}</div>
-                                </li>
-                            )}
-                        </ul>
+                    <div style={styles.cardInner}>
+                        <div
+                            style={{
+                                ...styles.iconDiv,
+                                ...(this.state.themeType === 'dark' ? styles.iconDivDark : styles.iconDivLight),
+                            }}
+                        >
+                            <InfoOutlined
+                                style={styles.icon}
+                                sx={{ backgroundColor: 'rgba(27,111,168,0.9)' }}
+                            />
+                        </div>
+                        <div style={styles.textDiv}>
+                            <div style={styles.cardHeader}>{I18n.t('Backup Information')}</div>
+                            <ul style={{ ...styles.list, listStyleType: 'none', padding: 0 }}>
+                                {this.state.native.minimalEnabled && (
+                                    <li style={styles.infoListItem}>
+                                        <History style={styles.historyIcon} />
+                                        <div>
+                                            <div style={styles.label}>{I18n.t('Last ioBroker backup:')}</div>
+                                            <div style={styles.value}>{this.state.iobrokerLastTime}</div>
+                                        </div>
+                                    </li>
+                                )}
+                                {this.state.native.minimalEnabled && (
+                                    <li style={styles.infoListItem}>
+                                        <Alarm style={styles.historyIcon} />
+                                        <div>
+                                            <div style={styles.label}>{I18n.t('Next ioBroker backup:')}</div>
+                                            <div style={styles.value}>{this.state.iobrokerNextTime}</div>
+                                        </div>
+                                    </li>
+                                )}
+                                {this.state.native.ccuEnabled && (
+                                    <li style={styles.infoListItem}>
+                                        <History style={styles.historyIcon} />
+                                        <div>
+                                            <div style={styles.label}>{I18n.t('Last CCU backup:')}</div>
+                                            <div style={styles.value}>{this.state.ccuLastTime}</div>
+                                        </div>
+                                    </li>
+                                )}
+                                {this.state.native.ccuEnabled && (
+                                    <li style={styles.infoListItem}>
+                                        <Alarm style={styles.historyIcon} />
+                                        <div>
+                                            <div style={styles.label}>{I18n.t('Next CCU backup:')}</div>
+                                            <div style={styles.value}>{this.state.ccuNextTime}</div>
+                                        </div>
+                                    </li>
+                                )}
+                            </ul>
+                        </div>
                     </div>
                 </CardContent>
             </Card>
@@ -494,32 +508,34 @@ export default class App extends GenericApp<GenericAppProps, AppState> {
         return (
             <Card sx={styles.card}>
                 <CardContent sx={styles.cardContent}>
-                    <div
-                        style={{
-                            ...styles.iconDiv,
-                            ...(this.state.themeType === 'dark' ? styles.iconDivDark : styles.iconDivLight),
-                        }}
-                    >
-                        <StorageOutlined
-                            style={styles.icon}
-                            sx={{ backgroundColor: 'rgba(41,168,216,0.9)' }}
-                        />
-                    </div>
-                    <div style={styles.textDiv}>
-                        <div style={styles.cardHeader}>{I18n.t('Activated storage options')}</div>
-                        <ul style={styles.list}>
-                            {options.map(
-                                option =>
-                                    this.state.native[option.name] && (
-                                        <li
-                                            key={option.name}
-                                            style={{ ...styles.listItem, fontSize: '1em' }}
-                                        >
-                                            {I18n.t(option.label)}
-                                        </li>
-                                    ),
-                            )}
-                        </ul>
+                    <div style={styles.cardInner}>
+                        <div
+                            style={{
+                                ...styles.iconDiv,
+                                ...(this.state.themeType === 'dark' ? styles.iconDivDark : styles.iconDivLight),
+                            }}
+                        >
+                            <StorageOutlined
+                                style={styles.icon}
+                                sx={{ backgroundColor: 'rgba(41,168,216,0.9)' }}
+                            />
+                        </div>
+                        <div style={styles.textDiv}>
+                            <div style={styles.cardHeader}>{I18n.t('Activated storage options')}</div>
+                            <ul style={styles.list}>
+                                {options.map(
+                                    option =>
+                                        this.state.native[option.name] && (
+                                            <li
+                                                key={option.name}
+                                                style={{ ...styles.listItem, fontSize: '0.95em' }}
+                                            >
+                                                {I18n.t(option.label)}
+                                            </li>
+                                        ),
+                                )}
+                            </ul>
+                        </div>
                     </div>
                 </CardContent>
             </Card>
@@ -548,32 +564,34 @@ export default class App extends GenericApp<GenericAppProps, AppState> {
         return (
             <Card sx={styles.card}>
                 <CardContent sx={styles.cardContent}>
-                    <div
-                        style={{
-                            ...styles.iconDiv,
-                            ...(this.state.themeType === 'dark' ? styles.iconDivDark : styles.iconDivLight),
-                        }}
-                    >
-                        <CloudUploadOutlined
-                            style={styles.icon}
-                            sx={{ backgroundColor: 'rgba(15,46,92,0.9)' }}
-                        />
-                    </div>
-                    <div style={styles.textDiv}>
-                        <div style={styles.cardHeader}>{I18n.t('Activated backup options')}</div>
-                        <ul style={styles.list}>
-                            {options.map(
-                                option =>
-                                    this.state.native[option.name] && (
-                                        <li
-                                            key={option.name}
-                                            style={{ ...styles.listItem, fontSize: '1em' }}
-                                        >
-                                            {I18n.t(option.label)}
-                                        </li>
-                                    ),
-                            )}
-                        </ul>
+                    <div style={styles.cardInner}>
+                        <div
+                            style={{
+                                ...styles.iconDiv,
+                                ...(this.state.themeType === 'dark' ? styles.iconDivDark : styles.iconDivLight),
+                            }}
+                        >
+                            <CloudUploadOutlined
+                                style={styles.icon}
+                                sx={{ backgroundColor: 'rgba(15,46,92,0.9)' }}
+                            />
+                        </div>
+                        <div style={styles.textDiv}>
+                            <div style={styles.cardHeader}>{I18n.t('Activated backup options')}</div>
+                            <ul style={styles.list}>
+                                {options.map(
+                                    option =>
+                                        this.state.native[option.name] && (
+                                            <li
+                                                key={option.name}
+                                                style={{ ...styles.listItem, fontSize: '0.95em' }}
+                                            >
+                                                {I18n.t(option.label)}
+                                            </li>
+                                        ),
+                                )}
+                            </ul>
+                        </div>
                     </div>
                 </CardContent>
             </Card>
@@ -656,7 +674,7 @@ export default class App extends GenericApp<GenericAppProps, AppState> {
                                     display: 'inline-block',
                                     position: 'absolute',
                                     right: 10,
-                                    top: 5,
+                                    top: 12,
                                 }}
                             >
                                 <Tooltip
@@ -717,7 +735,7 @@ export default class App extends GenericApp<GenericAppProps, AppState> {
                             <Box
                                 component="div"
                                 sx={{
-                                    m: '1rem 0 2rem 0',
+                                    m: '1rem 0 1.25rem 0',
                                     ...styles.header,
                                     ...(this.state.theme.name === 'light' ? styles.headerLight : undefined),
                                     ...(this.state.theme.name === 'colored' ? styles.headerColored : undefined),
@@ -730,9 +748,9 @@ export default class App extends GenericApp<GenericAppProps, AppState> {
                             <div
                                 style={{
                                     display: 'grid',
-                                    gridTemplateColumns: 'repeat(auto-fit, minmax(350px, 1fr))',
+                                    gridTemplateColumns: 'repeat(auto-fit, minmax(340px, 1fr))',
                                     gap: 16,
-                                    minHeight: 300,
+                                    minHeight: 260,
                                     gridAutoRows: '1fr',
                                 }}
                             >
@@ -743,7 +761,7 @@ export default class App extends GenericApp<GenericAppProps, AppState> {
                             <Box
                                 component="div"
                                 sx={{
-                                    m: '2rem 0 2rem 0',
+                                    m: '1.5rem 0 1.25rem 0',
                                     ...styles.header,
                                     ...(this.state.theme.name === 'light' ? styles.headerLight : undefined),
                                     ...(this.state.theme.name === 'colored' ? styles.headerColored : undefined),
