@@ -99,7 +99,7 @@
     "docs/",
     "build/",
     "!build/**/*.map",
-    "CHANGELOG_OLD.md",
+    "!CHANGELOG_OLD.md",
     "io-package.json",
     "LICENSE"
   ],
