@@ -1,21 +1,8 @@
 {
   "common": {
     "name": "backitup",
-    "version": "4.0.1",
+    "version": "4.0.0",
     "news": {
-      "4.0.1": {
-        "en": "Fix Backitup Tab",
-        "de": "Backup-Registerkarte reparieren",
-        "ru": "Исправить вкладку «Резервное копирование»",
-        "pt": "Corrigir guia do Backitup",
-        "nl": "Het Backitup-tabblad repareren",
-        "fr": "Correction de l'onglet Backitup",
-        "it": "Risolvi la scheda di backup",
-        "es": "Reparar la pestaña de copia de seguridad",
-        "pl": "Napraw kartę kopii zapasowej",
-        "uk": "Виправити вкладку резервного копіювання",
-        "zh-cn": "修复备份选项卡"
-      },
       "4.0.0": {
         "en": "dependencies updated\nFix Translation\nsmall Fixes\nIntegrated token encryption\nFix Yahka Backup\nUpdated GUI packages und removed linter errors\nUpdate Node Engine\nMigrated to Admin 8\nRedesign Backitup Tab",
         "de": "Abhängigkeiten aktualisiert\nÜbersetzung korrigieren\nkleine Korrekturen\nIntegrierte Token-Verschlüsselung\nYahka-Backup reparieren\nAktualisierte GUI-Pakete und behobene Linter-Fehler\nKnoten-Engine aktualisieren\nMigration zu Admin 8\nNeugestaltung der Backup-Registerkarte",
