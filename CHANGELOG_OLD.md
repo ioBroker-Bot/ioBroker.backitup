@@ -5,7 +5,6 @@
 * (simatec) Fix CCU Backup
 * (simatec) added SSL Skip for mysql Backup
 
-
 ## 3.3.13 (2025-12-14)
 * (simatec) Fix Error Log for CCU Backup
 

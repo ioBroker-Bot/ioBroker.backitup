@@ -61,7 +61,7 @@ When you allow iobroker GmbH to collect diagnostic data, then also your installa
 <!-- ### **WORK IN PROGRESS** -->
 
 ## Changelog
-### **WORK IN PROGRESS**
+### 4.0.1 (2026-08-07)
 * (simatec) Fix Backitup Tab
 
 ### 4.0.0 (2026-08-04)
@@ -86,6 +86,7 @@ When you allow iobroker GmbH to collect diagnostic data, then also your installa
 * (simatec) Changelog old added
 * (simatec) Repository cleaned up
 * (simatec) Fix CCU Backup Timeout
+
 
 [Older changelogs can be found there](CHANGELOG_OLD.md)
 
